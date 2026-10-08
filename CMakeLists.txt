@@ -36,6 +36,7 @@ if (SC_REST_SERVER_BUILD_TESTS)
     add_subdirectory(tests sc-rest-server-test)
 endif ()
 
+set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
 package_sc_module(
         DEPENDS simply-cpp-oatpp
         DEV_DEPENDS "simply-cpp-dev (>= 1.4.3)" simply-cpp-oatpp-dev)
