@@ -110,7 +110,13 @@ int main() {
         return sc::rest_response{200, "protected"};
     });
 
+    SECTION("Not running before run()");
+    CHECK(!server.wait_until_running(std::chrono::milliseconds{50}));
+
     std::thread server_thread{[&server] { server.run(); }};
+
+    SECTION("wait_until_running() once run() has started");
+    CHECK(server.wait_until_running());
 
     SECTION("Unprotected GET route");
     const auto health_response = request(port, "GET", "/health");
@@ -146,5 +152,29 @@ int main() {
 
     server.stop();
     server_thread.join();
+
+    SECTION("Not running after stop()");
+    CHECK(!server.wait_until_running(std::chrono::milliseconds{0}));
+
+    SECTION("wait_until_running() reports a server that cannot bind at once");
+    {
+        // 192.0.2.1 is a documentation address, never local, so binding to it fails.
+        sc::rest_server unbindable{{"192.0.2.1", available_port()}};
+        unbindable.get("/health", [](const sc::rest_request &) { return sc::rest_response{}; });
+        bool threw = false;
+        std::thread failing{[&unbindable, &threw] {
+            try {
+                unbindable.run();
+            } catch (const std::exception &) {
+                threw = true;
+            }
+        }};
+        const auto started = std::chrono::steady_clock::now();
+        CHECK(!unbindable.wait_until_running());
+        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{2});
+        failing.join();
+        CHECK(threw);
+    }
+
     TEST_SUMMARY();
 }

@@ -45,8 +45,15 @@ namespace sc {
         void bearer_post(std::string path, rest_handler handler);
         void configure_jwt(jwt_configuration configuration);
 
+        // Serves requests until stop() is called, usually from another thread.
         void run();
         void stop();
+
+        // Waits until run(), usually started on another thread, has bound the endpoint, so
+        // requests will be accepted. Returns false if run() failed or ended first, or after
+        // timeout. For a server that ran before, it reports that earlier run's end until run()
+        // is called again.
+        [[nodiscard]] bool wait_until_running(std::chrono::milliseconds timeout = std::chrono::seconds{5}) const;
 
     private:
         class implementation;

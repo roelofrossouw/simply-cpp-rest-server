@@ -15,6 +15,7 @@
 
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -328,23 +329,42 @@ public:
             const std::lock_guard lock{mutex_};
             if (server_) throw std::logic_error("REST server is already running");
 
-            auto router = oatpp::web::server::HttpRouter::createShared();
-            for (const auto &route : routes_) {
-                router->route(route.method.c_str(), route.path.c_str(),
-                              std::make_shared<route_handler>(route.handler, route.jwt));
-            }
+            try {
+                auto router = oatpp::web::server::HttpRouter::createShared();
+                for (const auto &route : routes_) {
+                    router->route(route.method.c_str(), route.path.c_str(),
+                                  std::make_shared<route_handler>(route.handler, route.jwt));
+                }
 
-            const auto provider = oatpp::network::tcp::server::ConnectionProvider::createShared(
-                {endpoint_.host.c_str(), static_cast<v_uint16>(endpoint_.port), oatpp::network::Address::IP_4});
-            const auto connection_handler = oatpp::web::server::HttpConnectionHandler::createShared(router);
-            server_ = oatpp::network::Server::createShared(provider, connection_handler);
-            server = server_;
+                // Creating the provider binds and listens, so connections are accepted from here on.
+                const auto provider = oatpp::network::tcp::server::ConnectionProvider::createShared(
+                    {endpoint_.host.c_str(), static_cast<v_uint16>(endpoint_.port), oatpp::network::Address::IP_4});
+                const auto connection_handler = oatpp::web::server::HttpConnectionHandler::createShared(router);
+                server_ = oatpp::network::Server::createShared(provider, connection_handler);
+                server = server_;
+            } catch (...) {
+                state_ = run_state::ended;
+                state_changed_.notify_all();
+                throw;
+            }
+            state_ = run_state::running;
         }
+        state_changed_.notify_all();
 
         server->run();
 
-        const std::lock_guard lock{mutex_};
-        if (server_ == server) server_.reset();
+        {
+            const std::lock_guard lock{mutex_};
+            if (server_ == server) server_.reset();
+            state_ = run_state::ended;
+        }
+        state_changed_.notify_all();
+    }
+
+    bool wait_until_running(const std::chrono::milliseconds timeout) {
+        std::unique_lock lock{mutex_};
+        state_changed_.wait_for(lock, timeout, [this] { return state_ != run_state::idle; });
+        return state_ == run_state::running;
     }
 
     void stop() {
@@ -364,8 +384,13 @@ private:
         std::shared_ptr<const jwt_service> jwt;
     };
 
+    // Whether the latest run() has started serving yet, or has ended (stopped or failed).
+    enum class run_state { idle, running, ended };
+
     ip_endpoint endpoint_;
     std::mutex mutex_;
+    std::condition_variable state_changed_;
+    run_state state_ = run_state::idle;
     std::vector<route> routes_;
     std::shared_ptr<const jwt_service> jwt_;
     std::shared_ptr<oatpp::network::Server> server_;
@@ -402,4 +427,8 @@ void sc::rest_server::run() {
 
 void sc::rest_server::stop() {
     implementation_->stop();
+}
+
+bool sc::rest_server::wait_until_running(const std::chrono::milliseconds timeout) const {
+    return implementation_->wait_until_running(timeout);
 }
