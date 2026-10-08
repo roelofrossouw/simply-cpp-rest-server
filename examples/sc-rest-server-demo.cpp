@@ -72,8 +72,10 @@ int main() {
                 return username == "demo" && password == "demo";  // check your user store here
             },
         });
-        server.bearer_get("/account", [](const sc::rest_request &) {
-            return sc::rest_response{200, R"({"account":"demo"})", "application/json"};
+        server.bearer_get("/account", [](const sc::rest_request &request) {
+            // request.claims is the verified token's payload; "sub" is the user who logged in.
+            const nlohmann::json account{{"account", request.claims.at("sub")}, {"expires", request.claims.at("exp")}};
+            return sc::rest_response{200, account.dump(), "application/json"};
         });
 
         // run() blocks until stop(), so it gets its own thread.
@@ -113,7 +115,7 @@ int main() {
         expect(greeting == "Hello World!", "GET /hello");
         expect(echoed == R"({"name":"simply-cpp"})", "POST /echo");
         expect(refused == R"({"error":"Unauthorized"})", "GET /account without a token");
-        expect(details == R"({"account":"demo"})", "GET /account with the token");
+        expect(nlohmann::json::parse(details).at("account") == "demo", "GET /account with the token");
         std::cout << "Done after " << sw << '\n';
     } catch (const std::exception &error) {
         std::cerr << "sc-rest-server-demo: " << error.what() << '\n';

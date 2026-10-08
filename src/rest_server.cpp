@@ -104,6 +104,7 @@ namespace {
         std::string type;
         unix_seconds issued_at;
         unix_seconds expires_at;
+        json payload;
     };
 
     class jwt_service {
@@ -144,10 +145,13 @@ namespace {
             }
         }
 
-        bool is_valid_access_token(const std::string_view authorization) const {
+        // The payload of a valid "Bearer <access token>" authorization, or nullopt.
+        std::optional<json> access_token_claims(const std::string_view authorization) const {
             constexpr std::string_view prefix = "Bearer ";
-            if (!authorization.starts_with(prefix)) return false;
-            return verify(authorization.substr(prefix.size()), "access").has_value();
+            if (!authorization.starts_with(prefix)) return std::nullopt;
+            auto claims = verify(authorization.substr(prefix.size()), "access");
+            if (!claims) return std::nullopt;
+            return std::move(claims->payload);
         }
 
     private:
@@ -186,6 +190,7 @@ namespace {
                     parsed_payload.at("type").get<std::string>(),
                     parsed_payload.at("iat").get<unix_seconds>(),
                     parsed_payload.at("exp").get<unix_seconds>(),
+                    parsed_payload,
                 };
                 if (claims.type != expected_type || now() >= claims.expires_at) return std::nullopt;
                 return claims;
@@ -250,7 +255,7 @@ namespace {
             if (request->getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH)) {
                 body = request->readBodyToString();
             }
-            const sc::rest_request rest_request{
+            sc::rest_request rest_request{
                 request->getStartingLine().method.std_str(),
                 request->getStartingLine().path.std_str(),
                 oat_string(body),
@@ -258,8 +263,10 @@ namespace {
             };
 
             try {
-                if (jwt_ && !jwt_->is_valid_access_token(rest_request.authorization)) {
-                    return make_response({401, R"({"error":"Unauthorized"})", "application/json"});
+                if (jwt_) {
+                    auto claims = jwt_->access_token_claims(rest_request.authorization);
+                    if (!claims) return make_response({401, R"({"error":"Unauthorized"})", "application/json"});
+                    rest_request.claims = std::move(*claims);
                 }
                 return make_response(handler_(rest_request));
             } catch (const std::exception &) {

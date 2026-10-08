@@ -106,8 +106,12 @@ int main() {
     server.get("/health", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.method + " ready"};
     });
-    server.bearer_get("/protected", [](const sc::rest_request &) {
-        return sc::rest_response{200, "protected"};
+    server.bearer_get("/protected", [](const sc::rest_request &request) {
+        return sc::rest_response{200, "protected for " + request.claims.at("sub").get<std::string>() + " (" +
+                                      request.claims.at("type").get<std::string>() + ")"};
+    });
+    server.get("/claims", [](const sc::rest_request &request) {
+        return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
     });
 
     SECTION("Not running before run()");
@@ -139,7 +143,11 @@ int main() {
     CHECK(unauthorized_response.starts_with("HTTP/1.1 401"));
     const auto protected_response = request(port, "GET", "/protected", {}, "Bearer " + tokens.at("access_token").get<std::string>());
     CHECK(protected_response.starts_with("HTTP/1.1 200"));
-    CHECK(protected_response.ends_with("protected"));
+    CHECK(protected_response.ends_with("protected for test (access)"));
+
+    SECTION("Unprotected routes have no claims");
+    CHECK(request(port, "GET", "/claims").ends_with("none"));
+    CHECK(request(port, "GET", "/claims", {}, "Bearer " + tokens.at("access_token").get<std::string>()).ends_with("none"));
 
     SECTION("JWT token refresh");
     const auto refresh_response = request(

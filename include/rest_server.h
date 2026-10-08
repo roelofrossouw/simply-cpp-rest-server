@@ -4,6 +4,7 @@
 #include <functional>
 #include <ip_endpoint.h>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 
@@ -13,6 +14,9 @@ namespace sc {
         std::string path;
         std::string body;
         std::string authorization;
+        // For bearer_get()/bearer_post() routes, the verified access token's payload: "sub" (the
+        // username given to /create_token), "type", "iat" and "exp". null for other routes.
+        nlohmann::json claims;
     };
 
     struct rest_response {
