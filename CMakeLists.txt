@@ -15,8 +15,7 @@ set(SOURCE_OBJECTS include/rest_server.h)
 set(SOURCE_LIBRARIES)
 set(SOURCE_LINK_LIBRARIES)
 
-add_sc_object(rest_server
-        PUBLIC_LINK_LIBRARIES sc::sc-core)
+add_sc_object(rest_server PUBLIC_LINK_LIBRARIES sc::sc-core)
 target_include_directories(sc-obj-rest_server PRIVATE "${oatpp_SOURCE_DIR}/src")
 
 add_sc_libraries(DESCRIPTION "simply-cpp REST server")
