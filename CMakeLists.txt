@@ -8,7 +8,8 @@ option(SC_REST_SERVER_BUILD_TESTS "Build simply-cpp-rest-server tests" ${PROJECT
 get_sc_version()
 message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
-find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.4.3)
+# The library needs 1.4.3; the demo also uses sc::getenv() (1.5.3).
+find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.5.5)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
 find_or_install_package(OpenSSL libssl-dev openssl)
@@ -37,6 +38,8 @@ if (SC_REST_SERVER_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests sc-rest-server-test)
 endif ()
+
+add_sc_example(sc-rest-server-demo RUN_AS_TEST)
 
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
 package_sc_module(
