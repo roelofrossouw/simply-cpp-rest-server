@@ -66,10 +66,11 @@ server.configure_jwt({
 });
 server.bearer_get("/account", [](const sc::rest_request &request) {
     // request.claims is the verified token's payload: "sub" is who logged in, "source"
-    // the IP address the token was issued to.
+    // the IP address the token was issued to, "exp" when it expires (Unix time).
+    const auto expires = sc::datetime::from_unix(request.claims.at("exp").get<long long>());
     const nlohmann::json account{{"account", request.claims.at("sub")},
                                  {"source", request.claims.at("source")},
-                                 {"expires", request.claims.at("exp")}};
+                                 {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}};
     return sc::rest_response{200, account.dump(), "application/json"};
 });
 
