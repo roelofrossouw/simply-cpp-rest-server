@@ -65,8 +65,11 @@ server.configure_jwt({
     },
 });
 server.bearer_get("/account", [](const sc::rest_request &request) {
-    // request.claims is the verified token's payload; "user" is who logged in.
-    const nlohmann::json account{{"account", request.claims.at("user")}, {"expires", request.claims.at("exp")}};
+    // request.claims is the verified token's payload: "sub" is who logged in, "source"
+    // the IP address the token was issued to.
+    const nlohmann::json account{{"account", request.claims.at("sub")},
+                                 {"source", request.claims.at("source")},
+                                 {"expires", request.claims.at("exp")}};
     return sc::rest_response{200, account.dump(), "application/json"};
 });
 
@@ -127,12 +130,15 @@ and `POST /refresh_token`, accepting a JSON `refresh_token`. Successful
 responses contain `access_token`, `refresh_token`, `expires_in`, and
 `refresh_expires_in`. Protected routes require an `Authorization: Bearer
 <access_token>` header. Their handlers get the verified token's payload as
-`request.claims` (an `nlohmann::json`): `user` is the username that logged in
-(also the standard `sub`), plus `type`, `iat` and `exp`. It is `null` for routes that aren't protected.
+`request.claims` (an `nlohmann::json`): `sub` is the username that logged in,
+`source` the client IP address the token was issued to, plus `type`, `iat` and
+`exp`. Every request also has the client's address as `request.remote_address`.
+A refreshed access token gets the refreshing client's address; the refresh
+token keeps the one it was first issued to. It is `null` for routes that aren't protected.
 
 ```cpp
 server.bearer_get("/account", [](const sc::rest_request &request) {
-    const auto username = request.claims.at("user").get<std::string>();
+    const auto username = request.claims.at("sub").get<std::string>();
     return sc::rest_response{200, "Hello " + username};
 });
 ```

@@ -128,7 +128,7 @@ namespace {
                 const auto username = credentials.at("username").get<std::string>();
                 const auto password = credentials.at("password").get<std::string>();
                 if (!configuration_.validate_credentials(username, password)) return unauthorized("Invalid credentials");
-                return token_response(username, now(), std::nullopt);
+                return token_response(username, request.remote_address, now(), std::nullopt);
             } catch (const json::exception &) {
                 return bad_request("Invalid token request");
             }
@@ -139,7 +139,8 @@ namespace {
                 const auto refresh_token = json::parse(request.body).at("refresh_token").get<std::string>();
                 const auto claims = verify(refresh_token, "refresh");
                 if (!claims) return unauthorized("Invalid refresh token");
-                return token_response(claims->subject, now(), claims->expires_at, refresh_token, claims->issued_at);
+                return token_response(claims->subject, request.remote_address, now(), claims->expires_at, refresh_token,
+                                      claims->issued_at);
             } catch (const json::exception &) {
                 return bad_request("Invalid refresh request");
             }
@@ -199,14 +200,16 @@ namespace {
             }
         }
 
-        sc::rest_response token_response(const std::string &subject, const unix_seconds issued_at,
+        // source is the client's IP address. A refresh reuses the refresh token, so that keeps the
+        // address it was first issued to, while the new access token gets the refreshing client's.
+        sc::rest_response token_response(const std::string &subject, const std::string &source, const unix_seconds issued_at,
                                          const std::optional<unix_seconds> refresh_expires_at,
                                          const std::optional<std::string> existing_refresh_token = std::nullopt,
                                          const std::optional<unix_seconds> refresh_issued_at = std::nullopt) const {
             const auto access_expires_at = issued_at + configuration_.access_token_lifetime.count();
             const auto access_token = sign(json{
                                                {"sub", subject},
-                                               {"user", subject},
+                                               {"source", source},
                                                {"type", "access"},
                                                {"iat", issued_at},
                                                {"exp", access_expires_at},
@@ -217,7 +220,7 @@ namespace {
                 original_issued_at + configuration_.refresh_token_lifetime.count());
             const auto refresh_token = existing_refresh_token.value_or(sign(json{
                                                                              {"sub", subject},
-                                                                             {"user", subject},
+                                                                             {"source", source},
                                                                              {"type", "refresh"},
                                                                              {"iat", original_issued_at},
                                                                              {"exp", refresh_expires},
@@ -262,6 +265,7 @@ namespace {
                 request->getStartingLine().path.std_str(),
                 oat_string(body),
                 oat_string(request->getHeader(oatpp::web::protocol::http::Header::AUTHORIZATION)),
+                remote_address(*request),
             };
 
             try {
@@ -277,6 +281,14 @@ namespace {
         }
 
     private:
+        // Needs the provider's extended connections, which record the peer address.
+        static std::string remote_address(IncomingRequest &request) {
+            const auto connection = request.getConnection();
+            if (!connection) return {};
+            return oat_string(connection->getInputStreamContext().getProperties().get(
+                oatpp::network::tcp::server::ConnectionProvider::ExtendedConnection::PROPERTY_PEER_ADDRESS));
+        }
+
         static std::shared_ptr<OutgoingResponse> make_response(const sc::rest_response &response) {
             if (response.status < 100 || response.status > 599) {
                 throw std::invalid_argument("REST handler returned an invalid HTTP status");
@@ -347,7 +359,8 @@ public:
 
                 // Creating the provider binds and listens, so connections are accepted from here on.
                 const auto provider = oatpp::network::tcp::server::ConnectionProvider::createShared(
-                    {endpoint_.host.c_str(), static_cast<v_uint16>(endpoint_.port), oatpp::network::Address::IP_4});
+                    {endpoint_.host.c_str(), static_cast<v_uint16>(endpoint_.port), oatpp::network::Address::IP_4},
+                    true);  // extended connections, so requests know the client's address
                 const auto connection_handler = oatpp::web::server::HttpConnectionHandler::createShared(router);
                 server_ = oatpp::network::Server::createShared(provider, connection_handler);
                 server = server_;
