@@ -206,6 +206,7 @@ namespace {
             const auto access_expires_at = issued_at + configuration_.access_token_lifetime.count();
             const auto access_token = sign(json{
                                                {"sub", subject},
+                                               {"user", subject},
                                                {"type", "access"},
                                                {"iat", issued_at},
                                                {"exp", access_expires_at},
@@ -216,6 +217,7 @@ namespace {
                 original_issued_at + configuration_.refresh_token_lifetime.count());
             const auto refresh_token = existing_refresh_token.value_or(sign(json{
                                                                              {"sub", subject},
+                                                                             {"user", subject},
                                                                              {"type", "refresh"},
                                                                              {"iat", original_issued_at},
                                                                              {"exp", refresh_expires},

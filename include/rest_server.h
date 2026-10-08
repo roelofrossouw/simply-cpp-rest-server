@@ -14,8 +14,9 @@ namespace sc {
         std::string path;
         std::string body;
         std::string authorization;
-        // For bearer_get()/bearer_post() routes, the verified access token's payload: "sub" (the
-        // username given to /create_token), "type", "iat" and "exp". null for other routes.
+        // For bearer_get()/bearer_post() routes, the verified access token's payload: "user" (the
+        // username given to /create_token, also in "sub"), "type", "iat" and "exp". null for
+        // other routes.
         nlohmann::json claims;
     };
 

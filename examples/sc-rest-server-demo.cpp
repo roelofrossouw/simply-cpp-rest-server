@@ -73,8 +73,8 @@ int main() {
             },
         });
         server.bearer_get("/account", [](const sc::rest_request &request) {
-            // request.claims is the verified token's payload; "sub" is the user who logged in.
-            const nlohmann::json account{{"account", request.claims.at("sub")}, {"expires", request.claims.at("exp")}};
+            // request.claims is the verified token's payload; "user" is who logged in.
+            const nlohmann::json account{{"account", request.claims.at("user")}, {"expires", request.claims.at("exp")}};
             return sc::rest_response{200, account.dump(), "application/json"};
         });
 
