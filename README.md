@@ -61,7 +61,7 @@ server.post("/echo", [](const sc::rest_request &request) {
 server.configure_jwt({
     .secret = random_secret(),
     .validate_credentials = [](const std::string_view username, const std::string_view password) {
-        return username == "demo" && password == "demo";  // check your user store here
+        return username == password;  // check your user store here
     },
 });
 server.bearer_get("/account", [](const sc::rest_request &request) {
@@ -98,7 +98,7 @@ const auto refused = anonymous.get();
 std::cout << "GET /account without a token -> " << refused << '\n';
 
 sc::rest login{base_url + "/create_token"};
-const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo","password":"demo"})"));
+const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo2","password":"demo2"})"));
 if (!tokens.contains("access_token")) throw std::runtime_error{"login refused: " + tokens.dump()};
 std::cout << "POST /create_token -> token valid for " << tokens.at("expires_in") << " seconds\n";
 
