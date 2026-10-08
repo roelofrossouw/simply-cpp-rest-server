@@ -64,8 +64,10 @@ server.configure_jwt({
         return username == "demo" && password == "demo";  // check your user store here
     },
 });
-server.bearer_get("/account", [](const sc::rest_request &) {
-    return sc::rest_response{200, R"({"account":"demo"})", "application/json"};
+server.bearer_get("/account", [](const sc::rest_request &request) {
+    // request.claims is the verified token's payload; "sub" is the user who logged in.
+    const nlohmann::json account{{"account", request.claims.at("sub")}, {"expires", request.claims.at("exp")}};
+    return sc::rest_response{200, account.dump(), "application/json"};
 });
 
 // run() blocks until stop(), so it gets its own thread.
@@ -124,7 +126,16 @@ This registers `POST /create_token`, accepting JSON `username` and `password`,
 and `POST /refresh_token`, accepting a JSON `refresh_token`. Successful
 responses contain `access_token`, `refresh_token`, `expires_in`, and
 `refresh_expires_in`. Protected routes require an `Authorization: Bearer
-<access_token>` header.
+<access_token>` header. Their handlers get the verified token's payload as
+`request.claims` (an `nlohmann::json`): `sub` is the username that logged in,
+plus `type`, `iat` and `exp`. It is `null` for routes that aren't protected.
+
+```cpp
+server.bearer_get("/account", [](const sc::rest_request &request) {
+    const auto username = request.claims.at("sub").get<std::string>();
+    return sc::rest_response{200, "Hello " + username};
+});
+```
 
 The integration test requires `SC_REST_SERVER_TEST_JWT_SECRET` in the
 build-server test environment. It uses only the test-local `test`/`test`
