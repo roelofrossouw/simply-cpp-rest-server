@@ -107,7 +107,8 @@ int main() {
         return sc::rest_response{200, request.method + " ready"};
     });
     server.bearer_get("/protected", [](const sc::rest_request &request) {
-        return sc::rest_response{200, "protected for " + request.claims.at("sub").get<std::string>() + " (" +
+        if (request.claims.at("user") != request.claims.at("sub")) return sc::rest_response{500, "user and sub differ"};
+        return sc::rest_response{200, "protected for " + request.claims.at("user").get<std::string>() + " (" +
                                       request.claims.at("type").get<std::string>() + ")"};
     });
     server.get("/claims", [](const sc::rest_request &request) {
@@ -157,6 +158,11 @@ int main() {
     CHECK_EQ(refreshed_tokens.at("expires_in"), 300);
     CHECK(refreshed_tokens.at("refresh_expires_in").get<int>() > 0);
     CHECK(refreshed_tokens.at("refresh_expires_in").get<int>() <= 10800);
+
+    SECTION("A refreshed access token keeps the user claim");
+    const auto refreshed_protected = request(port, "GET", "/protected", {},
+                                             "Bearer " + refreshed_tokens.at("access_token").get<std::string>());
+    CHECK(refreshed_protected.ends_with("protected for test (access)"));
 
     server.stop();
     server_thread.join();
