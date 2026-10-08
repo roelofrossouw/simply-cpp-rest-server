@@ -107,9 +107,12 @@ int main() {
         return sc::rest_response{200, request.method + " ready"};
     });
     server.bearer_get("/protected", [](const sc::rest_request &request) {
-        if (request.claims.at("user") != request.claims.at("sub")) return sc::rest_response{500, "user and sub differ"};
-        return sc::rest_response{200, "protected for " + request.claims.at("user").get<std::string>() + " (" +
-                                      request.claims.at("type").get<std::string>() + ")"};
+        return sc::rest_response{200, "protected for " + request.claims.at("sub").get<std::string>() + " (" +
+                                      request.claims.at("type").get<std::string>() + ") from " +
+                                      request.claims.at("source").get<std::string>()};
+    });
+    server.get("/address", [](const sc::rest_request &request) {
+        return sc::rest_response{200, request.remote_address};
     });
     server.get("/claims", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
@@ -144,7 +147,10 @@ int main() {
     CHECK(unauthorized_response.starts_with("HTTP/1.1 401"));
     const auto protected_response = request(port, "GET", "/protected", {}, "Bearer " + tokens.at("access_token").get<std::string>());
     CHECK(protected_response.starts_with("HTTP/1.1 200"));
-    CHECK(protected_response.ends_with("protected for test (access)"));
+    CHECK(protected_response.ends_with("protected for test (access) from 127.0.0.1"));
+
+    SECTION("Requests carry the client's address");
+    CHECK(request(port, "GET", "/address").ends_with("\r\n\r\n127.0.0.1"));
 
     SECTION("Unprotected routes have no claims");
     CHECK(request(port, "GET", "/claims").ends_with("none"));
@@ -159,10 +165,10 @@ int main() {
     CHECK(refreshed_tokens.at("refresh_expires_in").get<int>() > 0);
     CHECK(refreshed_tokens.at("refresh_expires_in").get<int>() <= 10800);
 
-    SECTION("A refreshed access token keeps the user claim");
+    SECTION("A refreshed access token has the claims too");
     const auto refreshed_protected = request(port, "GET", "/protected", {},
                                              "Bearer " + refreshed_tokens.at("access_token").get<std::string>());
-    CHECK(refreshed_protected.ends_with("protected for test (access)"));
+    CHECK(refreshed_protected.ends_with("protected for test (access) from 127.0.0.1"));
 
     server.stop();
     server_thread.join();
