@@ -10,14 +10,16 @@ message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
 find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.4.3)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
+find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
+find_or_install_package(OpenSSL libssl-dev openssl)
 
 set(SOURCE_OBJECTS include/rest_server.h)
 set(SOURCE_LIBRARIES)
 set(SOURCE_LINK_LIBRARIES)
 
 add_sc_object(rest_server
-        LINK_LIBRARIES oatpp::oatpp
-        PUBLIC_LINK_LIBRARIES sc::sc-core oatpp::oatpp)
+        LINK_LIBRARIES oatpp::oatpp nlohmann_json::nlohmann_json OpenSSL::Crypto
+        PUBLIC_LINK_LIBRARIES sc::sc-core oatpp::oatpp nlohmann_json::nlohmann_json OpenSSL::Crypto)
 
 add_sc_libraries(DESCRIPTION "simply-cpp REST server")
 target_compile_features(sc-rest-server PUBLIC cxx_std_20)
@@ -39,4 +41,4 @@ endif ()
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
 package_sc_module(
         DEPENDS simply-cpp-oatpp
-        DEV_DEPENDS "simply-cpp-dev (>= 1.4.3)" simply-cpp-oatpp-dev)
+        DEV_DEPENDS "simply-cpp-dev (>= 1.4.3)" simply-cpp-oatpp-dev nlohmann-json3-dev libssl-dev)

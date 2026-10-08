@@ -1,9 +1,11 @@
 #include <rest_server.h>
 #include <sc_test.h>
 
+#include <nlohmann/json.hpp>
+
 #include <arpa/inet.h>
 #include <chrono>
-#include <cstring>
+#include <cstdlib>
 #include <netinet/in.h>
 #include <stdexcept>
 #include <string>
@@ -12,6 +14,8 @@
 #include <unistd.h>
 
 namespace {
+    using json = nlohmann::json;
+
     int available_port() {
         const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (socket_fd < 0) throw std::runtime_error("Unable to create test socket");
@@ -33,7 +37,8 @@ namespace {
         return ntohs(address.sin_port);
     }
 
-    std::string request(const int port, const std::string &http_request) {
+    std::string request(const int port, const std::string &method, const std::string &path, const std::string &body = {},
+                        const std::string &authorization = {}) {
         for (int attempt = 0; attempt < 100; ++attempt) {
             const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
             if (socket_fd < 0) throw std::runtime_error("Unable to create test socket");
@@ -47,16 +52,25 @@ namespace {
             }
 
             if (connect(socket_fd, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0) {
+                std::string http_request = method + ' ' + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
+                if (!authorization.empty()) http_request += "Authorization: " + authorization + "\r\n";
+                if (!body.empty()) {
+                    http_request += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
+                }
+                http_request += "\r\n" + body;
                 if (send(socket_fd, http_request.data(), http_request.size(), 0) < 0) {
                     close(socket_fd);
                     throw std::runtime_error("Unable to send HTTP request");
                 }
 
-                char buffer[1024];
-                const auto bytes = recv(socket_fd, buffer, sizeof(buffer), 0);
+                std::string response;
+                char buffer[4096];
+                for (ssize_t bytes = recv(socket_fd, buffer, sizeof(buffer), 0); bytes > 0;
+                     bytes = recv(socket_fd, buffer, sizeof(buffer), 0)) {
+                    response.append(buffer, static_cast<std::size_t>(bytes));
+                }
                 close(socket_fd);
-                if (bytes < 0) throw std::runtime_error("Unable to receive HTTP response");
-                return {buffer, static_cast<std::size_t>(bytes)};
+                return response;
             }
 
             close(socket_fd);
@@ -64,30 +78,71 @@ namespace {
         }
         throw std::runtime_error("REST server did not start listening");
     }
+
+    json response_body(const std::string &response) {
+        const auto body_start = response.find("\r\n\r\n");
+        if (body_start == std::string::npos) throw std::runtime_error("HTTP response has no body");
+        return json::parse(response.substr(body_start + 4));
+    }
 }
 
 int main() {
+    const auto *secret = std::getenv("SC_REST_SERVER_TEST_JWT_SECRET");
+    if (!secret || !*secret) {
+        std::cerr << "SC_REST_SERVER_TEST_JWT_SECRET is required for the JWT integration test\n";
+        return EXIT_FAILURE;
+    }
+
     const int port = available_port();
     sc::rest_server server{{"127.0.0.1", port}};
+    server.configure_jwt({
+        .secret = secret,
+        .access_token_lifetime = std::chrono::seconds{300},
+        .refresh_token_lifetime = std::chrono::hours{3},
+        .validate_credentials = [](const std::string_view username, const std::string_view password) {
+            return username == "test" && password == "test";
+        },
+    });
     server.get("/health", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.method + " ready"};
     });
-    server.post("/echo", [](const sc::rest_request &request) {
-        return sc::rest_response{201, request.body};
+    server.bearer_get("/protected", [](const sc::rest_request &) {
+        return sc::rest_response{200, "protected"};
     });
 
     std::thread server_thread{[&server] { server.run(); }};
 
-    SECTION("GET route");
-    const auto health_response = request(port, "GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    SECTION("Unprotected GET route");
+    const auto health_response = request(port, "GET", "/health");
     CHECK(health_response.starts_with("HTTP/1.1 200"));
     CHECK(health_response.ends_with("GET ready"));
 
-    SECTION("POST route");
-    const auto echo_response = request(
-        port, "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
-    CHECK(echo_response.starts_with("HTTP/1.1 201"));
-    CHECK(echo_response.ends_with("hello"));
+    SECTION("JWT token creation");
+    const auto invalid_token_response = request(port, "POST", "/create_token", R"({"username":"test","password":"wrong"})");
+    CHECK(invalid_token_response.starts_with("HTTP/1.1 401"));
+
+    const auto token_response = request(port, "POST", "/create_token", R"({"username":"test","password":"test"})");
+    CHECK(token_response.starts_with("HTTP/1.1 200"));
+    const auto tokens = response_body(token_response);
+    CHECK_EQ(tokens.at("token_type"), "Bearer");
+    CHECK_EQ(tokens.at("expires_in"), 300);
+    CHECK_EQ(tokens.at("refresh_expires_in"), 10800);
+
+    SECTION("Bearer protected route");
+    const auto unauthorized_response = request(port, "GET", "/protected");
+    CHECK(unauthorized_response.starts_with("HTTP/1.1 401"));
+    const auto protected_response = request(port, "GET", "/protected", {}, "Bearer " + tokens.at("access_token").get<std::string>());
+    CHECK(protected_response.starts_with("HTTP/1.1 200"));
+    CHECK(protected_response.ends_with("protected"));
+
+    SECTION("JWT token refresh");
+    const auto refresh_response = request(
+        port, "POST", "/refresh_token", json{{"refresh_token", tokens.at("refresh_token")}}.dump());
+    CHECK(refresh_response.starts_with("HTTP/1.1 200"));
+    const auto refreshed_tokens = response_body(refresh_response);
+    CHECK_EQ(refreshed_tokens.at("expires_in"), 300);
+    CHECK(refreshed_tokens.at("refresh_expires_in").get<int>() > 0);
+    CHECK(refreshed_tokens.at("refresh_expires_in").get<int>() <= 10800);
 
     server.stop();
     server_thread.join();
