@@ -9,22 +9,22 @@ get_sc_version()
 message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
 find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.4.3)
-include(cmake/oatpp.cmake)
+find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 
 set(SOURCE_OBJECTS include/rest_server.h)
 set(SOURCE_LIBRARIES)
 set(SOURCE_LINK_LIBRARIES)
 
-add_sc_object(rest_server PUBLIC_LINK_LIBRARIES sc::sc-core)
-target_include_directories(sc-obj-rest_server PRIVATE "${oatpp_SOURCE_DIR}/src")
+add_sc_object(rest_server
+        LINK_LIBRARIES oatpp::oatpp
+        PUBLIC_LINK_LIBRARIES sc::sc-core oatpp::oatpp)
 
 add_sc_libraries(DESCRIPTION "simply-cpp REST server")
 target_compile_features(sc-rest-server PUBLIC cxx_std_20)
 target_compile_features(sc-rest-server-shared PUBLIC cxx_std_20)
-target_link_libraries(sc-rest-server-shared PRIVATE oatpp)
 
 install_sc_module(PATH_VARS CMAKE_INSTALL_INCLUDEDIR)
-install(FILES cmake/SimplyCppFunctions.cmake cmake/sc_bootstrap.cmake cmake/oatpp.cmake
+install(FILES cmake/SimplyCppFunctions.cmake cmake/sc_bootstrap.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/sc-rest-server
         COMPONENT development)
 install(FILES tests/sc_test.h
@@ -36,4 +36,6 @@ if (SC_REST_SERVER_BUILD_TESTS)
     add_subdirectory(tests sc-rest-server-test)
 endif ()
 
-package_sc_module(DEV_DEPENDS "simply-cpp-dev (>= 1.4.3)")
+package_sc_module(
+        DEPENDS simply-cpp-oatpp
+        DEV_DEPENDS "simply-cpp-dev (>= 1.4.3)" simply-cpp-oatpp-dev)

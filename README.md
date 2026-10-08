@@ -19,6 +19,5 @@ server.run();
 ```
 
 Call `stop()` from another thread to end `run()`. Routes must be registered
-before the server starts. Oatpp is fetched at configure time and pinned to
-version `1.3.1`; its OpenAPI and JWT extensions are intentionally not part of
-this initial API.
+before the server starts. Oatpp is supplied by the `sc-oatpp` package; its
+OpenAPI and JWT extensions are intentionally not part of this initial API.
