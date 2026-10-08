@@ -18,7 +18,10 @@ server.post("/echo", [](const sc::rest_request &request) {
 server.run();
 ```
 
-Call `stop()` from another thread to end `run()`. Routes must be registered
+Call `stop()` from another thread to end `run()`. When `run()` is on a
+background thread, `wait_until_running(timeout)` waits until it has bound the
+endpoint (returning `true`), or returns `false` as soon as `run()` fails or ends,
+or after the timeout (default 5 seconds). Routes must be registered
 before the server starts. Oatpp is supplied by the `sc-oatpp` package; its
 OpenAPI extension is intentionally not part of this initial API.
 
@@ -53,20 +56,18 @@ server.post("/echo", [](const sc::rest_request &request) {
 });
 
 // run() blocks until stop(), so it gets its own thread.
-std::atomic<bool> server_ended{false};
-std::thread server_thread{[&server, &server_ended] {
+std::thread server_thread{[&server] {
     try {
         server.run();
     } catch (const std::exception &error) {
         std::cerr << "sc-rest-server-demo: " << error.what() << '\n';
     }
-    server_ended = true;
 }};
 
 std::string greeting;
 std::string echoed;
-const bool listening = wait_until_listening(endpoint, std::chrono::seconds{5}, server_ended);
-if (listening) {
+const bool running = server.wait_until_running();
+if (running) {
     sc::rest hello{base_url + "/hello"};
     greeting = hello.get();
     std::cout << "GET /hello -> " << greeting << '\n';
