@@ -24,7 +24,7 @@ elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-set(SC_HELPERS_VERSION 20)
+set(SC_HELPERS_VERSION 21)
 set(SC_VERSION_FILE "VERSION.txt")
 set(SC_VERSION_DEFAULT "1.0.0")
 
@@ -485,16 +485,20 @@ function(add_sc_test name)
             TIMEOUT ${ARG_TIMEOUT}
             LABELS "${ARG_LABELS}")
 endfunction()
-# add_sc_example(<name> [SOURCE <file>] [LINK_LIBRARIES ...] [RUN_AS_TEST] [ARGS ...] [TIMEOUT <seconds>])
+# add_sc_example(<name> [SOURCE <file>] [LINK_LIBRARIES ...])
 # Build examples/<name>.cpp against the module's shared library and install it with the
 # runtime package, so `apt install <package>` alone is enough to run it. Name examples
-# sc-<module>-<what> since they land in bin/. RUN_AS_TEST also runs it under CTest with ARGS.
+# sc-<module>-<what> since they land in bin/. A demo is for people trying the module, so it
+# prints what it does rather than checking anything, and is not registered with CTest.
 # README.md code blocks marked with <!-- sc-example: <file> --> are refreshed from the source.
 function(add_sc_example name)
-    set(options RUN_AS_TEST)
     set(one_value_args SOURCE TIMEOUT)
     set(multi_value_args LINK_LIBRARIES ARGS)
-    cmake_parse_arguments(ARG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+    cmake_parse_arguments(ARG "RUN_AS_TEST" "${one_value_args}" "${multi_value_args}" ${ARGN})
+    if (ARG_RUN_AS_TEST OR ARG_TIMEOUT OR ARG_ARGS)
+        message(WARNING "add_sc_example(${name}): demos are not tests, so RUN_AS_TEST, ARGS and TIMEOUT"
+                " are ignored; drop them")
+    endif ()
 
     sc_module_name(module)
     if (NOT name MATCHES "^${module}-")
@@ -506,9 +510,6 @@ function(add_sc_example name)
     if (NOT ARG_LINK_LIBRARIES)
         set(ARG_LINK_LIBRARIES sc::${module}-shared)
     endif ()
-    if (NOT ARG_TIMEOUT)
-        set(ARG_TIMEOUT 30)
-    endif ()
 
     sc_sync_readme_later()
     if (NOT SC_BUILD_EXAMPLES)
@@ -518,11 +519,6 @@ function(add_sc_example name)
     add_executable(${name} "${ARG_SOURCE}")
     target_link_libraries(${name} PRIVATE ${ARG_LINK_LIBRARIES})
     install(TARGETS ${name} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT runtime)
-
-    if (ARG_RUN_AS_TEST)
-        add_test(NAME example-${name} COMMAND ${name} ${ARG_ARGS})
-        set_tests_properties(example-${name} PROPERTIES TIMEOUT ${ARG_TIMEOUT} LABELS example)
-    endif ()
 endfunction()
 
 # Sync README.md once, after the whole CMakeLists.txt has been read.

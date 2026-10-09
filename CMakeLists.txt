@@ -39,7 +39,7 @@ if (SC_REST_SERVER_BUILD_TESTS)
     add_subdirectory(tests sc-rest-server-test)
 endif ()
 
-add_sc_example(sc-rest-server-demo RUN_AS_TEST)
+add_sc_example(sc-rest-server-demo)
 
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
 package_sc_module(

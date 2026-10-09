@@ -50,12 +50,13 @@ OpenAPI extension is intentionally not part of this initial API.
 
 ## Demo
 
-`sc-rest-server-demo` is installed with the runtime package
-(`simply-cpp-rest-server`). It starts a server in a background thread and
-queries it with `sc::rest` from the main thread: a GET, a JSON POST, and a route
-protected with JWT bearer authentication, first without a token (refused) and
-then with one from `POST /create_token`. It needs no other server, and generates
-a new JWT secret each run since it only checks its own tokens:
+`sc-rest-server-demo` runs a server and its client in one program: the server in
+a background thread, and the main thread calling it with `sc::rest` - a GET, a
+JSON POST, and a route protected with JWT bearer authentication, first without a
+token and then with one from `POST /create_token`. Each request is shown with the
+response it got. It is installed with the runtime package
+(`simply-cpp-rest-server`) and needs no other server. It is a demonstration, not
+a test, so CTest doesn't run it:
 
 ```bash
 sc-rest-server-demo                                          # 127.0.0.1:18080
@@ -63,8 +64,7 @@ SC_REST_SERVER_DEMO_SERVER=127.0.0.1:9090 sc-rest-server-demo
 ```
 
 `SC_REST_SERVER_DEMO_SERVER` is the IPv4 `host[:port]` to listen on and query.
-Unset or empty means `127.0.0.1:18080`; an invalid value is an error. The
-`example-sc-rest-server-demo` CTest runs it the same way.
+Unset or empty means `127.0.0.1:18080`; an invalid value is an error.
 
 Its source is `examples/sc-rest-server-demo.cpp`; the code below is copied from
 it at configure time, so it always matches code that compiles:
@@ -117,27 +117,27 @@ std::thread server_thread{
 const server_thread_guard guard{server, server_thread};
 if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
+heading("Plain text");
 sc::rest hello{base_url + "/hello"};
-const auto greeting = hello.get();
-std::cout << "GET /hello -> " << greeting << '\n';
+show("GET /hello", hello.get());
 
+heading("JSON in, JSON out");
 sc::rest echo{base_url + "/echo?one=abc&two=5"};
-const auto echoed = echo.post(R"({"name":"simply-cpp"})");
-std::cout << "POST /echo -> " << echoed << '\n';
+show(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
 
+heading("A route protected with a JWT bearer token");
 sc::rest anonymous{base_url + "/account"};
-const auto refused = anonymous.get();
-std::cout << "GET /account without a token -> " << refused << '\n';
+show("GET /account  (no token)", anonymous.get());
 
 sc::rest login{base_url + "/create_token"};
 const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo2","password":"demo2"})"));
 if (!tokens.contains("access_token")) throw std::runtime_error{"login refused: " + tokens.dump()};
-std::cout << "POST /create_token -> token valid for " << tokens.at("expires_in") << " seconds\n";
+show(R"(POST /create_token  {"username":"demo2","password":"demo2"})",
+     "an access token, valid for " + tokens.at("expires_in").dump() + " seconds, and a refresh token");
 
 sc::rest account{base_url + "/account"};
 account.bearer(tokens.at("access_token").get<std::string>());
-const auto details = account.get();
-std::cout << "GET /account with the token -> " << details << '\n';
+show("GET /account  (with the access token)", account.get());
 ```
 <!-- /sc-example -->
 
