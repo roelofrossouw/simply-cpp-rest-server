@@ -2,8 +2,6 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/SimplyCppFunctions.cmake")
 
-set_and_check(SC_TEST_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
-
 find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.4.3)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
