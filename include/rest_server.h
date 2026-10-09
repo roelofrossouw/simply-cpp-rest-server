@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <ip_endpoint.h>
 #include <memory>
@@ -22,10 +24,48 @@ namespace sc {
         nlohmann::json claims;
     };
 
+    // The usual response content types. Any other can still be given as a string (rest_content_type).
+    enum class content_type { text, json, csv, binary };
+
+    // The Content-Type header for each content_type, in the enum's order.
+    inline constexpr std::array<std::string_view, 4> content_type_headers{
+        "text/plain; charset=utf-8",
+        "application/json",
+        "text/csv; charset=utf-8",
+        "application/octet-stream",
+    };
+
+    constexpr std::string_view content_type_header(const content_type type) {
+        return content_type_headers[static_cast<std::size_t>(type)];
+    }
+
+    // A response's Content-Type header: a content_type, or any header value as a string, so a
+    // handler can write sc::content_type::json or "image/png" alike.
+    class rest_content_type {
+    public:
+        rest_content_type(const content_type type = content_type::text) : value_(content_type_header(type)) {
+        }
+
+        rest_content_type(std::string value) : value_(std::move(value)) {
+        }
+
+        rest_content_type(const char *value) : value_(value) {
+        }
+
+        [[nodiscard]] const std::string &value() const { return value_; }
+
+        operator const std::string &() const { return value_; }
+
+        friend bool operator==(const rest_content_type &, const rest_content_type &) = default;
+
+    private:
+        std::string value_;
+    };
+
     struct rest_response {
         int status = 200;
-        std::string body;
-        std::string content_type = "text/plain; charset=utf-8";
+        std::string body; // bytes: binary bodies may contain zero bytes
+        rest_content_type content_type;
     };
 
     using rest_handler = std::function<rest_response(const rest_request &)>;
