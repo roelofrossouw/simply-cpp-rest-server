@@ -8,8 +8,9 @@ option(SC_REST_SERVER_BUILD_TESTS "Build simply-cpp-rest-server tests" ${PROJECT
 get_sc_version()
 message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
-# The library needs 1.4.3; the demo also uses sc::getenv(), sc::datetime and sc::console (1.5.11).
-find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.5.11)
+# The library needs 1.4.3; the demo also uses sc::getenv(), sc::datetime, sc::console::subheading,
+# and an sc::rest that can be called more than once (1.5.13).
+find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.5.13)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
 find_or_install_package(OpenSSL libssl-dev openssl)
