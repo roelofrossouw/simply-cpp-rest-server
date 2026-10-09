@@ -127,8 +127,9 @@ namespace {
                 const auto credentials = json::parse(request.body);
                 const auto username = credentials.at("username").get<std::string>();
                 const auto password = credentials.at("password").get<std::string>();
-                if (!configuration_.validate_credentials(username, password)) return unauthorized("Invalid credentials");
-                return token_response(username, request.remote_address, now(), std::nullopt);
+                const auto subject = configuration_.validate_credentials(username, password);
+                if (subject.empty()) return unauthorized("Invalid credentials");
+                return token_response(subject, request.remote_address, now(), std::nullopt);
             } catch (const json::exception &) {
                 return bad_request("Invalid token request");
             }

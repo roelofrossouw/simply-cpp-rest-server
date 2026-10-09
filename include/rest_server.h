@@ -69,7 +69,9 @@ namespace sc {
     };
 
     using rest_handler = std::function<rest_response(const rest_request &)>;
-    using jwt_credential_validator = std::function<bool(std::string_view username, std::string_view password)>;
+    // Checks a login for POST /create_token. Returns the subject to put in the tokens' "sub" claim,
+    // such as the user's id (or simply the username); an empty string refuses the login.
+    using jwt_credential_validator = std::function<std::string(std::string_view username, std::string_view password)>;
 
     struct jwt_configuration {
         std::string secret;

@@ -100,8 +100,9 @@ int main() {
         .secret = secret,
         .access_token_lifetime = std::chrono::seconds{300},
         .refresh_token_lifetime = std::chrono::hours{3},
+        // Returns an id rather than the login name, which then becomes the tokens' "sub".
         .validate_credentials = [](const std::string_view username, const std::string_view password) {
-            return username == "test" && password == "test";
+            return username == "test" && password == "test" ? std::string{"user-42"} : std::string{};
         },
     });
     server.get("/health", [](const sc::rest_request &request) {
@@ -168,7 +169,7 @@ int main() {
     CHECK(unauthorized_response.starts_with("HTTP/1.1 401"));
     const auto protected_response = request(port, "GET", "/protected", {}, "Bearer " + tokens.at("access_token").get<std::string>());
     CHECK(protected_response.starts_with("HTTP/1.1 200"));
-    CHECK(protected_response.ends_with("protected for test (access) from 127.0.0.1"));
+    CHECK(protected_response.ends_with("protected for user-42 (access) from 127.0.0.1"));
 
     SECTION("Responses carry their content type");
     const auto csv_response = request(port, "GET", "/csv");
@@ -200,7 +201,7 @@ int main() {
     SECTION("A refreshed access token has the claims too");
     const auto refreshed_protected = request(port, "GET", "/protected", {},
                                              "Bearer " + refreshed_tokens.at("access_token").get<std::string>());
-    CHECK(refreshed_protected.ends_with("protected for test (access) from 127.0.0.1"));
+    CHECK(refreshed_protected.ends_with("protected for user-42 (access) from 127.0.0.1"));
 
     server.stop();
     server_thread.join();
