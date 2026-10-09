@@ -33,6 +33,14 @@ echo "Running cmake to make sure scripted files are up to date."
 cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-local -S . || exit
 echo "Syncing $dirpath to $server:$module"
 rsync -av --no-owner --no-group ./ "$user@$server:/var/www/build/$module/" --exclude=".git" --exclude=".idea" --exclude="cmake-*" --delete || exit
+# The suite's private area for this module (data its tests need that is never in the module's own
+# repository, such as real identity documents) goes beside it on the build server.
+suite_path=$(git -C "$dirpath" rev-parse --show-superproject-working-tree 2>/dev/null)
+if [ -n "$suite_path" ] && [ -d "$suite_path/private/$module" ]; then
+    echo "Syncing the suite's private/$module to $server:private/$module"
+    rsync -av --no-owner --no-group "$suite_path/private/$module/" "$user@$server:/var/www/build/private/$module/" \
+        --exclude="*.bundle" --delete || exit
+fi
 ssh "$user@$server" "if [ -r /etc/simply-cpp/test.env ]; then set -a; . /etc/simply-cpp/test.env; set +a; fi; exec /var/www/build/$module/scripts/run.sh"
 remote_result=$?
 popd || exit
