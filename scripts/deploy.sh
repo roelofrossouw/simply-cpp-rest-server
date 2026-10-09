@@ -32,7 +32,7 @@ pushd "$dirpath" || exit
 echo "Running cmake to make sure scripted files are up to date."
 cmake -DCMAKE_BUILD_TYPE=Release -B cmake-build-local -S . || exit
 echo "Syncing $dirpath to $server:$module"
-rsync -av ./ "$user@$server:/var/www/build/$module/" --exclude=".git" --exclude=".idea" --exclude="cmake-*" --delete || exit
+rsync -av --no-owner --no-group ./ "$user@$server:/var/www/build/$module/" --exclude=".git" --exclude=".idea" --exclude="cmake-*" --delete || exit
 ssh "$user@$server" "if [ -r /etc/simply-cpp/test.env ]; then set -a; . /etc/simply-cpp/test.env; set +a; fi; exec /var/www/build/$module/scripts/run.sh"
 remote_result=$?
 popd || exit
