@@ -10,7 +10,7 @@ message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
 # The library needs 1.4.3; the demo also uses sc::getenv(), sc::datetime, sc::console::subheading,
 # and an sc::rest that can be called more than once (1.5.13).
-find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.5.13)
+find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.5.21)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
 find_or_install_package(OpenSSL libssl-dev openssl)
@@ -42,4 +42,4 @@ add_sc_example(sc-rest-server-demo)
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
 package_sc_module(
         DEPENDS simply-cpp-oatpp
-        DEV_DEPENDS "simply-cpp-dev (>= 1.4.3)" simply-cpp-oatpp-dev nlohmann-json3-dev libssl-dev)
+        DEV_DEPENDS "simply-cpp-dev (>= 1.5.21~)" simply-cpp-oatpp-dev nlohmann-json3-dev libssl-dev)
