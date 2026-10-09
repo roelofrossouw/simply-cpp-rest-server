@@ -77,34 +77,42 @@ server.get("/hello", [](const sc::rest_request &) {
     return sc::rest_response{200, "Hello World!"};
 });
 server.post("/echo", [](const sc::rest_request &request) {
-    return sc::rest_response{200, request.body, sc::content_type::json};
+    nlohmann::json response{
+        {"Query String", request.path},
+        {"Post", nlohmann::json::parse(request.body)}
+    };
+    return sc::rest_response{200, response.dump(2), sc::content_type::json};
 });
 
 // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
 server.configure_jwt({
     .secret = random_secret(),
     .validate_credentials = [](const std::string_view username, const std::string_view password) {
-        return username == password;  // check your user store here
+        return username == password; // check your user store here
     },
 });
 server.bearer_get("/account", [](const sc::rest_request &request) {
     // request.claims is the verified token's payload: "sub" is who logged in, "source"
     // the IP address the token was issued to, "exp" when it expires (Unix time).
     const auto expires = sc::datetime::from_unix(request.claims.at("exp").get<long long>());
-    const nlohmann::json account{{"account", request.claims.at("sub")},
-                                 {"source", request.claims.at("source")},
-                                 {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}};
+    const nlohmann::json account{
+        {"account", request.claims.at("sub")},
+        {"source", request.claims.at("source")},
+        {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}
+    };
     return sc::rest_response{200, account.dump(), sc::content_type::json};
 });
 
 // run() blocks until stop(), so it gets its own thread.
-std::thread server_thread{[&server] {
-    try {
-        server.run();
-    } catch (const std::exception &error) {
-        std::cerr << "sc-rest-server-demo: " << error.what() << '\n';
+std::thread server_thread{
+    [&server] {
+        try {
+            server.run();
+        } catch (const std::exception &error) {
+            std::cerr << "sc-rest-server-demo: " << error.what() << '\n';
+        }
     }
-}};
+};
 const server_thread_guard guard{server, server_thread};
 if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
@@ -112,7 +120,7 @@ sc::rest hello{base_url + "/hello"};
 const auto greeting = hello.get();
 std::cout << "GET /hello -> " << greeting << '\n';
 
-sc::rest echo{base_url + "/echo"};
+sc::rest echo{base_url + "/echo?one=abc&two=5"};
 const auto echoed = echo.post(R"({"name":"simply-cpp"})");
 std::cout << "POST /echo -> " << echoed << '\n';
 
