@@ -48,8 +48,12 @@ pushd $build_directory || exit
 rm -rf *.deb
 cpack --config CPackConfig.cmake -G DEB
 rm -rf *unknown*.deb
-rsync -av --no-owner --no-group *.deb /var/www/build/debs/
-rm -rf /var/www/build/debs/*unknown*
+# Only the packages this run built go into this server's distribution. /var/www/build is shared
+# by the build servers, so the shared debs folder can hold other modules' and other servers'
+# packages too: included here, they went into the wrong distribution and went missing from
+# their own (moved to processed before their server's run).
+built_debs=()
+for deb in "$PWD"/*.deb; do [ -f "$deb" ] && built_debs+=("$deb"); done
 popd || exit
 
 debfile="${module/sc-/simply-cpp-}"
@@ -60,11 +64,11 @@ export GNUPGHOME=/var/www/build/signing
 reprepro remove $ubuntu_codename $debfile
 reprepro remove $ubuntu_codename $debfile-dev
 reprepro list $ubuntu_codename
-for deb in ../debs/*.deb; do
-    [ -f "$deb" ] || continue
+install -d ../debs/processed
+for deb in "${built_debs[@]}"; do
     echo "Loading $deb"
     reprepro includedeb $ubuntu_codename "$deb"
-    mv "$deb" ../debs/processed/
+    cp "$deb" ../debs/processed/ # kept as a record
 done
 reprepro list $ubuntu_codename
 popd || exit
