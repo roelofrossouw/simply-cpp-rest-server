@@ -5,20 +5,17 @@
 // Listens on SC_REST_SERVER_DEMO_SERVER (one IPv4 host[:port]); unset or empty means
 // 127.0.0.1:18080, and an invalid value is an error.
 
-#include <console.h>
-#include <core.h>
-#include <datetime.h>
-#include <rest.h>
-#include <rest_server.h>
-#include <timer.h>
+#include <iostream>
+#include <string>
+#include <stdexcept>
+#include <thread>
+#include <random>
 
 #include <nlohmann/json.hpp>
 
-#include <iostream>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <thread>
+#include <sc.h>
+
+#include <rest_server.h>
 
 namespace {
     // A new signing secret each run: the demo verifies only its own tokens. A real service
