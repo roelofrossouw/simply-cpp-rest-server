@@ -117,27 +117,27 @@ std::thread server_thread{
 const server_thread_guard guard{server, server_thread};
 if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
-heading("Plain text");
+sc::console::heading("Plain text");
 sc::rest hello{base_url + "/hello"};
-show("GET /hello", hello.get());
+sc::console::show_text("GET /hello", hello.get());
 
-heading("JSON in, JSON out");
+sc::console::heading("JSON in, JSON out");
 sc::rest echo{base_url + "/echo?one=abc&two=5"};
-show(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
+sc::console::show_text(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
 
-heading("A route protected with a JWT bearer token");
+sc::console::heading("A route protected with a JWT bearer token");
 sc::rest anonymous{base_url + "/account"};
-show("GET /account  (no token)", anonymous.get());
+sc::console::show_text("GET /account  (no token)", anonymous.get());
 
 sc::rest login{base_url + "/create_token"};
 const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo2","password":"demo2"})"));
 if (!tokens.contains("access_token")) throw std::runtime_error{"login refused: " + tokens.dump()};
-show(R"(POST /create_token  {"username":"demo2","password":"demo2"})",
+sc::console::show_text(R"(POST /create_token  {"username":"demo2","password":"demo2"})",
      "an access token, valid for " + tokens.at("expires_in").dump() + " seconds, and a refresh token");
 
 sc::rest account{base_url + "/account"};
 account.bearer(tokens.at("access_token").get<std::string>());
-show("GET /account  (with the access token)", account.get());
+sc::console::show_text("GET /account  (with the access token)", account.get());
 ```
 <!-- /sc-example -->
 
