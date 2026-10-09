@@ -89,7 +89,7 @@ server.configure_jwt({
     .secret = random_secret(),
     // Returns the "sub" for the tokens (a user id, say), or "" to refuse the login.
     .validate_credentials = [](const std::string_view username, const std::string_view password) {
-        return username == password ? std::string{username} : std::string{}; // check your user store here
+        return username == password ? std::string{"102034"} : std::string{}; // check your user store here
     },
 });
 server.bearer_get("/account", [](const sc::rest_request &request) {
@@ -126,18 +126,22 @@ sc::rest echo{base_url + "/echo?one=abc&two=5"};
 sc::console::show_text(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
 
 sc::console::heading("A route protected with a JWT bearer token");
-sc::rest anonymous{base_url + "/account"};
-sc::console::show_text("GET /account  (no token)", anonymous.get());
-
-sc::rest login{base_url + "/create_token"};
-const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo2","password":"demo2"})"));
-if (!tokens.contains("access_token")) throw std::runtime_error{"login refused: " + tokens.dump()};
-sc::console::show_text(R"(POST /create_token  {"username":"demo2","password":"demo2"})",
-     "an access token, valid for " + tokens.at("expires_in").dump() + " seconds, and a refresh token");
-
+sc::console::subheading("Without a token");
 sc::rest account{base_url + "/account"};
+sc::console::show_text("GET /account", account.get());
+
+sc::console::subheading("Logging in with the wrong password");
+sc::rest login{base_url + "/create_token"};
+sc::console::show_text(R"(POST /create_token  {"username":"demo","password":"wrong"})",
+                       login.post(R"({"username":"demo","password":"wrong"})"));
+
+sc::console::subheading("Logging in");
+const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo","password":"demo"})"));
+sc::console::show_text(R"(POST /create_token  {"username":"demo","password":"demo"})", tokens.dump(2));
+
+sc::console::subheading("With the access token");
 account.bearer(tokens.at("access_token").get<std::string>());
-sc::console::show_text("GET /account  (with the access token)", account.get());
+sc::console::show_text("GET /account  (Authorization: Bearer <access_token>)", account.get());
 ```
 <!-- /sc-example -->
 
