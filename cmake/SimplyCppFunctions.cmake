@@ -24,7 +24,7 @@ elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-set(SC_HELPERS_VERSION 21)
+set(SC_HELPERS_VERSION 22)
 set(SC_VERSION_FILE "VERSION.txt")
 set(SC_VERSION_DEFAULT "1.0.0")
 
@@ -175,6 +175,31 @@ macro(find_or_install_package package apt_name brew_name)
     message(STATUS "${package} found - ${${package}_VERSION}")
 endmacro()
 
+# sc_forget_stale_pkg_config(<prefix>)
+# pkg_check_modules() keeps what it found in the cache and doesn't look again. Homebrew keeps
+# each version of a package in its own Cellar folder and removes the old one on upgrade, so a
+# cached library path can stop existing (make: "No rule to make target .../Cellar/<package>/
+# <old version>/lib/..."). When one has, forget the result so pkg-config is asked again.
+function(sc_forget_stale_pkg_config prefix)
+    get_cmake_property(cached_variables CACHE_VARIABLES)
+    set(stale FALSE)
+    foreach (variable IN LISTS cached_variables)
+        if (variable MATCHES "^pkgcfg_lib_${prefix}_" AND ${variable} AND NOT EXISTS "${${variable}}")
+            set(stale TRUE)
+        endif ()
+    endforeach ()
+    if (NOT stale)
+        return()
+    endif ()
+    message(STATUS "${prefix}: the cached location is gone (upgraded?), looking again")
+    foreach (variable IN LISTS cached_variables)
+        if (variable MATCHES "^pkgcfg_lib_${prefix}_")
+            unset(${variable} CACHE)
+        endif ()
+    endforeach ()
+    unset(__pkg_config_checked_${prefix} CACHE)
+endfunction()
+
 macro(config_or_install_package package apt_name brew_name)
     cmake_parse_arguments(SC_PACKAGE "" "" "COMPONENTS" ${ARGN})
     set(SC_PACKAGE_ARGS)
@@ -185,6 +210,7 @@ macro(config_or_install_package package apt_name brew_name)
 
     message(STATUS "Detecting ${package}")
     find_package(PkgConfig REQUIRED)
+    sc_forget_stale_pkg_config(${package})
     pkg_check_modules(${package} IMPORTED_TARGET ${package_lower})
 
     # Tesseract ships pkg-config rather than a CMake config on both platforms.
