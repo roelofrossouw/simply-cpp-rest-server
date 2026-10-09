@@ -48,7 +48,7 @@ pushd $build_directory || exit
 rm -rf *.deb
 cpack --config CPackConfig.cmake -G DEB
 rm -rf *unknown*.deb
-rsync -av *.deb /var/www/build/debs/
+rsync -av --no-owner --no-group *.deb /var/www/build/debs/
 rm -rf /var/www/build/debs/*unknown*
 popd || exit
 
