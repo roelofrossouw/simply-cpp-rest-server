@@ -73,8 +73,9 @@ int main() {
         // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
         server.configure_jwt({
             .secret = random_secret(),
+            // Returns the "sub" for the tokens (a user id, say), or "" to refuse the login.
             .validate_credentials = [](const std::string_view username, const std::string_view password) {
-                return username == password; // check your user store here
+                return username == password ? std::string{username} : std::string{}; // check your user store here
             },
         });
         server.bearer_get("/account", [](const sc::rest_request &request) {
@@ -126,7 +127,7 @@ int main() {
         // [/readme]
 
         expect(greeting == "Hello World!", "GET /hello");
-        expect(echoed == R"({"name":"simply-cpp"})", "POST /echo");
+        expect(nlohmann::json::parse(echoed).at("Post") == nlohmann::json{{"name", "simply-cpp"}}, "POST /echo");
         expect(refused == R"({"error":"Unauthorized"})", "GET /account without a token");
         // expect(nlohmann::json::parse(details).at("account") == "demo", "GET /account with the token");
         std::cout << "Done after " << sw << '\n';

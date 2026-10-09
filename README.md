@@ -87,8 +87,9 @@ server.post("/echo", [](const sc::rest_request &request) {
 // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
 server.configure_jwt({
     .secret = random_secret(),
+    // Returns the "sub" for the tokens (a user id, say), or "" to refuse the login.
     .validate_credentials = [](const std::string_view username, const std::string_view password) {
-        return username == password; // check your user store here
+        return username == password ? std::string{username} : std::string{}; // check your user store here
     },
 });
 server.bearer_get("/account", [](const sc::rest_request &request) {
@@ -150,8 +151,10 @@ server.configure_jwt({
     .secret = jwt_secret,
     .access_token_lifetime = std::chrono::minutes{5},
     .refresh_token_lifetime = std::chrono::hours{3},
-    .validate_credentials = [](std::string_view username, std::string_view password) {
-        return validate_user(username, password);
+    // The subject for the tokens' "sub" claim, such as the user's id; "" refuses the login.
+    .validate_credentials = [](std::string_view username, std::string_view password) -> std::string {
+        if (const auto user = find_user(username, password)) return std::to_string(user->id);
+        return {};
     },
 });
 server.bearer_get("/account", account_handler);
@@ -162,7 +165,8 @@ and `POST /refresh_token`, accepting a JSON `refresh_token`. Successful
 responses contain `access_token`, `refresh_token`, `expires_in`, and
 `refresh_expires_in`. Protected routes require an `Authorization: Bearer
 <access_token>` header. Their handlers get the verified token's payload as
-`request.claims` (an `nlohmann::json`): `sub` is the username that logged in,
+`request.claims` (an `nlohmann::json`): `sub` is what `validate_credentials`
+returned for the login (the user's id, say, or the username),
 `source` the client IP address the token was issued to, plus `type`, `iat` and
 `exp`. Every request also has the client's address as `request.remote_address`.
 A refreshed access token gets the refreshing client's address; the refresh
