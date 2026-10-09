@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -111,6 +112,15 @@ int main() {
                                       request.claims.at("type").get<std::string>() + ") from " +
                                       request.claims.at("source").get<std::string>()};
     });
+    server.get("/csv", [](const sc::rest_request &) {
+        return sc::rest_response{200, "name,kind\nsimply-cpp,library\n", sc::content_type::csv};
+    });
+    server.get("/binary", [](const sc::rest_request &) {
+        return sc::rest_response{200, std::string("a\0b\xff", 4), sc::content_type::binary};
+    });
+    server.get("/custom", [](const sc::rest_request &) {
+        return sc::rest_response{200, "<svg/>", "image/svg+xml"};
+    });
     server.get("/address", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.remote_address};
     });
@@ -125,6 +135,17 @@ int main() {
 
     SECTION("wait_until_running() once run() has started");
     CHECK(server.wait_until_running());
+
+    SECTION("Content types");
+    CHECK_EQ(sc::content_type_header(sc::content_type::text), std::string_view{"text/plain; charset=utf-8"});
+    CHECK_EQ(sc::content_type_header(sc::content_type::json), std::string_view{"application/json"});
+    CHECK_EQ(sc::content_type_header(sc::content_type::csv), std::string_view{"text/csv; charset=utf-8"});
+    CHECK_EQ(sc::content_type_header(sc::content_type::binary), std::string_view{"application/octet-stream"});
+    CHECK((sc::rest_response{}.content_type == sc::content_type::text));
+    CHECK((sc::rest_content_type{sc::content_type::json} == "application/json"));
+    CHECK_EQ(sc::rest_content_type{std::string{"image/png"}}.value(), std::string{"image/png"});
+    const std::string as_string = sc::rest_content_type{sc::content_type::csv};
+    CHECK_EQ(as_string, std::string{"text/csv; charset=utf-8"});
 
     SECTION("Unprotected GET route");
     const auto health_response = request(port, "GET", "/health");
@@ -148,6 +169,17 @@ int main() {
     const auto protected_response = request(port, "GET", "/protected", {}, "Bearer " + tokens.at("access_token").get<std::string>());
     CHECK(protected_response.starts_with("HTTP/1.1 200"));
     CHECK(protected_response.ends_with("protected for test (access) from 127.0.0.1"));
+
+    SECTION("Responses carry their content type");
+    const auto csv_response = request(port, "GET", "/csv");
+    CHECK(csv_response.find("Content-Type: text/csv; charset=utf-8\r\n") != std::string::npos);
+    CHECK(csv_response.ends_with("name,kind\nsimply-cpp,library\n"));
+    const auto binary_response = request(port, "GET", "/binary");
+    CHECK(binary_response.find("Content-Type: application/octet-stream\r\n") != std::string::npos);
+    CHECK(binary_response.ends_with(std::string("\r\n\r\na\0b\xff", 8))); // zero byte kept
+    const auto custom_response = request(port, "GET", "/custom");
+    CHECK(custom_response.find("Content-Type: image/svg+xml\r\n") != std::string::npos);
+    CHECK(request(port, "GET", "/health").find("Content-Type: text/plain; charset=utf-8\r\n") != std::string::npos);
 
     SECTION("Requests carry the client's address");
     CHECK(request(port, "GET", "/address").ends_with("\r\n\r\n127.0.0.1"));

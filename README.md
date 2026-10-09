@@ -13,10 +13,33 @@ server.get("/health", [](const sc::rest_request &) {
     return sc::rest_response{200, "ready"};
 });
 server.post("/echo", [](const sc::rest_request &request) {
-    return sc::rest_response{201, request.body};
+    return sc::rest_response{201, request.body, sc::content_type::json};
 });
 server.run();
 ```
+
+A response's content type is `text` (`text/plain; charset=utf-8`) unless the
+handler says otherwise, with a `sc::content_type` or any `Content-Type` value as a
+string. The body is bytes, so a binary body may contain zero bytes:
+
+```cpp
+server.get("/report.csv", [](const sc::rest_request &) {
+    return sc::rest_response{200, "name,kind\nsimply-cpp,library\n", sc::content_type::csv};
+});
+server.get("/logo.svg", [svg = sc::file_get_contents("logo.svg")](const sc::rest_request &) {
+    return sc::rest_response{200, svg, "image/svg+xml"};
+});
+```
+
+| `sc::content_type` | `Content-Type` |
+|---|---|
+| `text` (default) | `text/plain; charset=utf-8` |
+| `json` | `application/json` |
+| `csv` | `text/csv; charset=utf-8` |
+| `binary` | `application/octet-stream` |
+
+`sc::content_type_header(type)` gives the header value, and
+`sc::content_type_headers` holds them all, in the enum's order.
 
 Call `stop()` from another thread to end `run()`. When `run()` is on a
 background thread, `wait_until_running(timeout)` waits until it has bound the
@@ -54,7 +77,7 @@ server.get("/hello", [](const sc::rest_request &) {
     return sc::rest_response{200, "Hello World!"};
 });
 server.post("/echo", [](const sc::rest_request &request) {
-    return sc::rest_response{200, request.body, "application/json"};
+    return sc::rest_response{200, request.body, sc::content_type::json};
 });
 
 // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
@@ -71,7 +94,7 @@ server.bearer_get("/account", [](const sc::rest_request &request) {
     const nlohmann::json account{{"account", request.claims.at("sub")},
                                  {"source", request.claims.at("source")},
                                  {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}};
-    return sc::rest_response{200, account.dump(), "application/json"};
+    return sc::rest_response{200, account.dump(), sc::content_type::json};
 });
 
 // run() blocks until stop(), so it gets its own thread.

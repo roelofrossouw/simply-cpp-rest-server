@@ -235,15 +235,15 @@ namespace {
                         {"refresh_expires_in", refresh_expires - issued_at},
                     }
                         .dump(),
-                    "application/json"};
+                    sc::content_type::json};
         }
 
         static sc::rest_response bad_request(const std::string_view message) {
-            return {400, json{{"error", message}}.dump(), "application/json"};
+            return {400, json{{"error", message}}.dump(), sc::content_type::json};
         }
 
         static sc::rest_response unauthorized(const std::string_view message) {
-            return {401, json{{"error", message}}.dump(), "application/json"};
+            return {401, json{{"error", message}}.dump(), sc::content_type::json};
         }
 
         sc::jwt_configuration configuration_;
@@ -271,7 +271,7 @@ namespace {
             try {
                 if (jwt_) {
                     auto claims = jwt_->access_token_claims(rest_request.authorization);
-                    if (!claims) return make_response({401, R"({"error":"Unauthorized"})", "application/json"});
+                    if (!claims) return make_response({401, R"({"error":"Unauthorized"})", sc::content_type::json});
                     rest_request.claims = std::move(*claims);
                 }
                 return make_response(handler_(rest_request));
@@ -293,9 +293,12 @@ namespace {
             if (response.status < 100 || response.status > 599) {
                 throw std::invalid_argument("REST handler returned an invalid HTTP status");
             }
+            // With its length, so a binary body's zero bytes are kept.
             auto outgoing_response = ResponseFactory::createResponse(
-                oatpp::web::protocol::http::Status{response.status, "Response"}, response.body.c_str());
-            outgoing_response->putHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE, response.content_type.c_str());
+                oatpp::web::protocol::http::Status{response.status, "Response"},
+                oatpp::String(response.body.data(), static_cast<v_buff_size>(response.body.size())));
+            outgoing_response->putHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE,
+                                         response.content_type.value().c_str());
             return outgoing_response;
         }
 

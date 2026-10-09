@@ -63,7 +63,7 @@ int main() {
             return sc::rest_response{200, "Hello World!"};
         });
         server.post("/echo", [](const sc::rest_request &request) {
-            return sc::rest_response{200, request.body, "application/json"};
+            return sc::rest_response{200, request.body, sc::content_type::json};
         });
 
         // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
@@ -80,7 +80,7 @@ int main() {
             const nlohmann::json account{{"account", request.claims.at("sub")},
                                          {"source", request.claims.at("source")},
                                          {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}};
-            return sc::rest_response{200, account.dump(), "application/json"};
+            return sc::rest_response{200, account.dump(), sc::content_type::json};
         });
 
         // run() blocks until stop(), so it gets its own thread.
