@@ -5,6 +5,7 @@
 // Listens on SC_REST_SERVER_DEMO_SERVER (one IPv4 host[:port]); unset or empty means
 // 127.0.0.1:18080, and an invalid value is an error.
 
+#include <console.h>
 #include <core.h>
 #include <datetime.h>
 #include <rest.h>
@@ -14,8 +15,6 @@
 #include <nlohmann/json.hpp>
 
 #include <iostream>
-#include <sstream>
-#include <string_view>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -48,25 +47,14 @@ namespace {
         std::thread &thread_;
     };
 
-    // One request of the demo and the response body it got, indented under it.
-    void show(const std::string_view request, const std::string &response) {
-        std::cout << "  " << request << "\n      -> ";
-        std::istringstream lines{response};
-        std::string line;
-        for (bool first = true; std::getline(lines, line); first = false) {
-            std::cout << (first ? "" : "         ") << line << '\n';
-        }
-    }
-
-    void heading(const std::string_view title) { std::cout << '\n' << title << '\n'; }
 }
 
 int main() {
     try {
         const auto endpoint = sc::ip_endpoint::parse(sc::getenv("SC_REST_SERVER_DEMO_SERVER", "127.0.0.1"), 18080);
         const auto base_url = "http://" + endpoint.to_string();
-        std::cout << "simply-cpp rest-server: a server and its client in one program\n"
-                  << "The server listens on " << base_url << "  (SC_REST_SERVER_DEMO_SERVER)\n";
+        sc::console::title("simply-cpp rest-server: a server and its client in one program");
+        sc::console::output() << "The server listens on " << base_url << "  (SC_REST_SERVER_DEMO_SERVER)\n";
 
         // [readme]
         sc::timer sw;
@@ -115,30 +103,30 @@ int main() {
         const server_thread_guard guard{server, server_thread};
         if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
-        heading("Plain text");
+        sc::console::heading("Plain text");
         sc::rest hello{base_url + "/hello"};
-        show("GET /hello", hello.get());
+        sc::console::show_text("GET /hello", hello.get());
 
-        heading("JSON in, JSON out");
+        sc::console::heading("JSON in, JSON out");
         sc::rest echo{base_url + "/echo?one=abc&two=5"};
-        show(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
+        sc::console::show_text(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
 
-        heading("A route protected with a JWT bearer token");
+        sc::console::heading("A route protected with a JWT bearer token");
         sc::rest anonymous{base_url + "/account"};
-        show("GET /account  (no token)", anonymous.get());
+        sc::console::show_text("GET /account  (no token)", anonymous.get());
 
         sc::rest login{base_url + "/create_token"};
         const auto tokens = nlohmann::json::parse(login.post(R"({"username":"demo2","password":"demo2"})"));
         if (!tokens.contains("access_token")) throw std::runtime_error{"login refused: " + tokens.dump()};
-        show(R"(POST /create_token  {"username":"demo2","password":"demo2"})",
+        sc::console::show_text(R"(POST /create_token  {"username":"demo2","password":"demo2"})",
              "an access token, valid for " + tokens.at("expires_in").dump() + " seconds, and a refresh token");
 
         sc::rest account{base_url + "/account"};
         account.bearer(tokens.at("access_token").get<std::string>());
-        show("GET /account  (with the access token)", account.get());
+        sc::console::show_text("GET /account  (with the access token)", account.get());
         // [/readme]
 
-        std::cout << "\nAll of that took " << sw << ", stopping the server.\n";
+        sc::console::output() << "\nAll of that took " << sw << ", stopping the server.\n";
     } catch (const std::exception &error) {
         std::cerr << "sc-rest-server-demo: " << error.what() << '\n';
         return 1;
