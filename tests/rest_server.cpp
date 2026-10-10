@@ -38,8 +38,9 @@ namespace {
         return ntohs(address.sin_port);
     }
 
+    // content_type is sent with a body; "" sends none.
     std::string request(const int port, const std::string &method, const std::string &path, const std::string &body = {},
-                        const std::string &authorization = {}) {
+                        const std::string &authorization = {}, const std::string &content_type = "application/json") {
         for (int attempt = 0; attempt < 100; ++attempt) {
             const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
             if (socket_fd < 0) throw std::runtime_error("Unable to create test socket");
@@ -56,7 +57,8 @@ namespace {
                 std::string http_request = method + ' ' + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
                 if (!authorization.empty()) http_request += "Authorization: " + authorization + "\r\n";
                 if (!body.empty()) {
-                    http_request += "Content-Type: application/json\r\nContent-Length: " + std::to_string(body.size()) + "\r\n";
+                    if (!content_type.empty()) http_request += "Content-Type: " + content_type + "\r\n";
+                    http_request += "Content-Length: " + std::to_string(body.size()) + "\r\n";
                 }
                 http_request += "\r\n" + body;
                 if (send(socket_fd, http_request.data(), http_request.size(), 0) < 0) {
@@ -125,6 +127,14 @@ int main() {
     server.get("/address", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.remote_address};
     });
+    // Everything a handler is told about the request, back as JSON.
+    const auto inspect = [](const sc::rest_request &request) {
+        const json seen{{"path", request.path}, {"query_string", request.query_string}, {"query", request.query},
+                        {"content_type", request.content_type}, {"json", request.json}, {"body", request.body}};
+        return sc::rest_response{200, seen.dump(), sc::content_type::json};
+    };
+    server.get("/inspect", inspect);
+    server.post("/inspect", inspect);
     server.get("/claims", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
     });
@@ -152,6 +162,54 @@ int main() {
     const auto health_response = request(port, "GET", "/health");
     CHECK(health_response.starts_with("HTTP/1.1 200"));
     CHECK(health_response.ends_with("GET ready"));
+
+    SECTION("The path and the query string");
+    {
+        const auto plain = response_body(request(port, "GET", "/inspect"));
+        CHECK_EQ(plain["path"].get<std::string>(), std::string{"/inspect"});
+        CHECK_EQ(plain["query_string"].get<std::string>(), std::string{});
+        CHECK(plain["query"].is_object() && plain["query"].empty());
+
+        const auto seen = response_body(request(port, "GET", "/inspect?page=2&tag=a%20b&name=Anna+Marie&flag&d=1&d=2&e[]=3&=x&&q=%3D%26"));
+        CHECK_EQ(seen["path"].get<std::string>(), std::string{"/inspect"}); // the route still matched
+        CHECK_EQ(seen["query_string"].get<std::string>(), std::string{"page=2&tag=a%20b&name=Anna+Marie&flag&d=1&d=2&e[]=3&=x&&q=%3D%26"});
+        const auto &query = seen["query"];
+        CHECK_EQ(query["page"].get<std::string>(), std::string{"2"}); // values stay text
+        CHECK_EQ(query["tag"].get<std::string>(), std::string{"a b"});
+        CHECK_EQ(query["name"].get<std::string>(), std::string{"Anna Marie"});
+        CHECK_EQ(query["flag"].get<std::string>(), std::string{});
+        CHECK(query["d"] == json({"1", "2"}));
+        CHECK(query["e"] == json({"3"}));
+        CHECK_EQ(query["q"].get<std::string>(), std::string{"=&"});
+        CHECK_EQ(query.size(), std::size_t{7}); // the nameless =x and the empty pair are skipped
+    }
+
+    SECTION("A JSON body as JSON");
+    {
+        const auto typed = response_body(request(port, "POST", "/inspect?id=7", R"({"name":"Alex","tags":["a","b"]})"));
+        CHECK_EQ(typed["content_type"].get<std::string>(), std::string{"application/json"});
+        CHECK_EQ(typed["json"]["name"].get<std::string>(), std::string{"Alex"});
+        CHECK_EQ(typed["json"]["tags"].size(), std::size_t{2});
+        CHECK_EQ(typed["query"]["id"].get<std::string>(), std::string{"7"});
+
+        const auto with_charset = response_body(request(port, "POST", "/inspect", "[1,2]", {}, "application/problem+json; charset=utf-8"));
+        CHECK(with_charset["json"] == json({1, 2}));
+
+        const auto untyped = response_body(request(port, "POST", "/inspect", R"(  {"a":1})", {}, ""));
+        CHECK_EQ(untyped["content_type"].get<std::string>(), std::string{});
+        CHECK_EQ(untyped["json"]["a"].get<int>(), 1); // no Content-Type, but it is JSON
+
+        const auto form = response_body(request(port, "POST", "/inspect", R"({"a":1})", {}, "application/x-www-form-urlencoded"));
+        CHECK(form["json"].is_null()); // another type isn't read as JSON
+        CHECK_EQ(form["body"].get<std::string>(), std::string{R"({"a":1})"});
+
+        const auto broken = response_body(request(port, "POST", "/inspect", R"({"a":)"));
+        CHECK(broken["json"].is_null());
+        CHECK_EQ(broken["body"].get<std::string>(), std::string{R"({"a":)"});
+
+        const auto text = response_body(request(port, "POST", "/inspect", "hello", {}, ""));
+        CHECK(text["json"].is_null());
+    }
 
     SECTION("JWT token creation");
     const auto invalid_token_response = request(port, "POST", "/create_token", R"({"username":"test","password":"wrong"})");

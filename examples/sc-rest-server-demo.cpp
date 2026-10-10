@@ -59,9 +59,11 @@ int main() {
             return sc::rest_response{200, "Hello World!"};
         });
         server.post("/echo", [](const sc::rest_request &request) {
+            // request.query is the query string as JSON, request.json a JSON body as JSON.
             nlohmann::json response{
-                {"Query String", request.path},
-                {"Post", nlohmann::json::parse(request.body)}
+                {"Path", request.path},
+                {"Query", request.query},
+                {"Post", request.json}
             };
             return sc::rest_response{200, response.dump(2), sc::content_type::json};
         });

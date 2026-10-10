@@ -13,15 +13,28 @@
 namespace sc {
     struct rest_request {
         std::string method;
+        // The path, without the query string: "/orders" for GET /orders?page=2.
         std::string path;
         std::string body;
         std::string authorization;
         // The client's IP address.
         std::string remote_address;
-        // For bearer_get()/bearer_post() routes, the verified access token's payload: "sub" (the
-        // username given to /create_token), "source" (the IP address the token was issued to),
-        // "type", "iat" and "exp". null for other routes.
+        // For bearer_get()/bearer_post() routes, the verified access token's payload: "sub" (what
+        // jwt_configuration::validate_credentials returned), "source" (the IP address the token was
+        // issued to), "type", "iat" and "exp". null for other routes.
         nlohmann::json claims;
+        // The query string as given, without the '?': "page=2&tag=a%20b".
+        std::string query_string;
+        // The query string as an object of strings, decoded (%XX, and + as a space):
+        // {"page": "2", "tag": "a b"}. A name given more than once, or ending in [] (tag[]=a),
+        // is a list. A name without = is "". Empty when there is no query string.
+        nlohmann::json query = nlohmann::json::object();
+        // The request's Content-Type header, "" when there is none.
+        std::string content_type;
+        // The body as JSON: when the Content-Type is JSON (application/json or ...+json), or when
+        // there is no Content-Type and the body is a JSON object or array. null otherwise, or
+        // when it doesn't parse; body always holds the text.
+        nlohmann::json json;
     };
 
     // The usual response content types. Any other can still be given as a string (rest_content_type).
