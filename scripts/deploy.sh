@@ -38,6 +38,7 @@ rsync -av --no-owner --no-group ./ "$user@$server:/var/www/build/$module/" --exc
 suite_path=$(git -C "$dirpath" rev-parse --show-superproject-working-tree 2>/dev/null)
 if [ -n "$suite_path" ] && [ -d "$suite_path/private/$module" ]; then
     echo "Syncing the suite's private/$module to $server:private/$module"
+    ssh "$user@$server" "mkdir -p /var/www/build/private/$module" || exit
     rsync -av --no-owner --no-group "$suite_path/private/$module/" "$user@$server:/var/www/build/private/$module/" \
         --exclude="*.bundle" --delete || exit
 fi
