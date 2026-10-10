@@ -5,6 +5,8 @@
 request bodies, status codes, and response content types without exposing oatpp
 types in its public API.
 
+**Documentation:** the [simply-cpp wiki](https://github.com/roelofrossouw/simply-cpp/wiki) has a [REST server guide](https://github.com/roelofrossouw/simply-cpp/wiki/REST-Server) and the [sc-rest-server reference](https://github.com/roelofrossouw/simply-cpp/wiki/Reference-sc-rest-server), plus [getting started](https://github.com/roelofrossouw/simply-cpp/wiki/Getting-Started) for the whole suite.
+
 ```cpp
 #include <rest_server.h>
 
