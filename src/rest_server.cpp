@@ -13,7 +13,9 @@
 #include <oatpp/web/server/HttpRequestHandler.hpp>
 #include <oatpp/web/server/HttpRouter.hpp>
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -26,6 +28,71 @@
 namespace {
     using json = nlohmann::json;
     using unix_seconds = std::int64_t;
+
+    // %XX decoded, and + as a space, as in a query string.
+    std::string url_decode(const std::string_view text) {
+        std::string result;
+        result.reserve(text.size());
+        for (std::size_t i = 0; i < text.size(); ++i) {
+            if (text[i] == '+') {
+                result += ' ';
+            } else if (text[i] == '%' && i + 2 < text.size() && std::isxdigit(static_cast<unsigned char>(text[i + 1])) &&
+                       std::isxdigit(static_cast<unsigned char>(text[i + 2]))) {
+                result += static_cast<char>(std::stoi(std::string{text.substr(i + 1, 2)}, nullptr, 16));
+                i += 2;
+            } else {
+                result += text[i];
+            }
+        }
+        return result;
+    }
+
+    // "a=1&b=x%20y&c&d=1&d=2&e[]=3" as {"a": "1", "b": "x y", "c": "", "d": ["1", "2"], "e": ["3"]}.
+    json parse_query(const std::string_view query) {
+        json result = json::object();
+        std::size_t start = 0;
+        while (start <= query.size()) {
+            const auto end = std::min(query.find('&', start), query.size());
+            const auto pair = query.substr(start, end - start);
+            start = end + 1;
+            if (pair.empty()) continue;
+            const auto equals = pair.find('=');
+            auto name = url_decode(pair.substr(0, equals));
+            const auto value = equals == std::string_view::npos ? std::string{} : url_decode(pair.substr(equals + 1));
+            const bool list = name.ends_with("[]");
+            if (list) name.resize(name.size() - 2);
+            if (name.empty()) continue;
+            auto &entry = result[name];
+            if (entry.is_null()) {
+                entry = list ? json::array({value}) : json(value);
+            } else {
+                if (!entry.is_array()) entry = json::array({entry});
+                entry.push_back(value);
+            }
+        }
+        return result;
+    }
+
+    // Whether a Content-Type names JSON: application/json, or a +json type such as
+    // application/problem+json, with or without parameters.
+    bool is_json_type(std::string type) {
+        type = type.substr(0, type.find(';'));
+        while (!type.empty() && std::isspace(static_cast<unsigned char>(type.back()))) type.pop_back();
+        std::ranges::transform(type, type.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return type == "application/json" || type.ends_with("+json");
+    }
+
+    // The body as JSON when it is JSON (see rest_request::json), else null.
+    json parse_body(const std::string &body, const std::string &content_type) {
+        if (content_type.empty()) {
+            const auto first = body.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos || (body[first] != '{' && body[first] != '[')) return nullptr;
+        } else if (!is_json_type(content_type)) {
+            return nullptr;
+        }
+        auto parsed = json::parse(body, nullptr, false);
+        return parsed.is_discarded() ? json{} : parsed;
+    }
 
     std::mutex environment_mutex;
     std::size_t environment_users = 0;
@@ -261,13 +328,21 @@ namespace {
             if (request->getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH)) {
                 body = request->readBodyToString();
             }
+            const auto target = request->getStartingLine().path.std_str();
+            const auto question = target.find('?');
             sc::rest_request rest_request{
                 request->getStartingLine().method.std_str(),
-                request->getStartingLine().path.std_str(),
+                target.substr(0, question),
                 oat_string(body),
                 oat_string(request->getHeader(oatpp::web::protocol::http::Header::AUTHORIZATION)),
                 remote_address(*request),
             };
+            if (question != std::string::npos) {
+                rest_request.query_string = target.substr(question + 1);
+                rest_request.query = parse_query(rest_request.query_string);
+            }
+            rest_request.content_type = oat_string(request->getHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE));
+            rest_request.json = parse_body(rest_request.body, rest_request.content_type);
 
             try {
                 if (jwt_) {

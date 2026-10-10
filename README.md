@@ -20,6 +20,28 @@ server.post("/echo", [](const sc::rest_request &request) {
 server.run();
 ```
 
+A handler gets the request as a `sc::rest_request`: `method`, `path` (without
+the query string), `body`, `authorization`, `remote_address` and `content_type`,
+plus two parsed forms:
+
+- `query`: the query string as a JSON object of decoded strings; a name given
+  more than once, or ending in `[]`, is a list. `query_string` keeps the raw text.
+- `json`: the body as JSON, when the `Content-Type` is JSON (`application/json`
+  or `...+json`), or when there is none and the body is a JSON object or array.
+  It is `null` otherwise, or when the body doesn't parse.
+
+```cpp
+server.post("/orders", [](const sc::rest_request &request) {
+    // POST /orders?dry_run=1  {"item": "book", "count": 2}
+    const bool dry_run = request.query.value("dry_run", "0") == "1";
+    if (!request.json.is_object()) return sc::rest_response{400, R"({"error":"JSON object expected"})", sc::content_type::json};
+    const auto item = request.json.value("item", "");
+    const int count = request.json.value("count", 1);
+    // ...
+    return sc::rest_response{dry_run ? 200 : 201, R"({"ok":true})", sc::content_type::json};
+});
+```
+
 A response's content type is `text` (`text/plain; charset=utf-8`) unless the
 handler says otherwise, with a `sc::content_type` or any `Content-Type` value as a
 string. The body is bytes, so a binary body may contain zero bytes:
@@ -79,9 +101,11 @@ server.get("/hello", [](const sc::rest_request &) {
     return sc::rest_response{200, "Hello World!"};
 });
 server.post("/echo", [](const sc::rest_request &request) {
+    // request.query is the query string as JSON, request.json a JSON body as JSON.
     nlohmann::json response{
-        {"Query String", request.path},
-        {"Post", nlohmann::json::parse(request.body)}
+        {"Path", request.path},
+        {"Query", request.query},
+        {"Post", request.json}
     };
     return sc::rest_response{200, response.dump(2), sc::content_type::json};
 });
