@@ -10,14 +10,20 @@ types in its public API.
 ```cpp
 #include <rest_server.h>
 
-sc::rest_server server{{"127.0.0.1", 8080}};
-server.get("/health", [](const sc::rest_request &) {
-    return sc::rest_response{200, "ready"};
-});
-server.post("/echo", [](const sc::rest_request &request) {
-    return sc::rest_response{201, request.body, sc::content_type::json};
-});
-server.run();
+sc::rest_response health(const sc::rest_request &) {
+    return {200, "ready"};
+}
+
+sc::rest_response echo(const sc::rest_request &request) {
+    return {201, request.body, sc::content_type::json};
+}
+
+int main() {
+    sc::rest_server server{{"127.0.0.1", 8080}};
+    server.get("/health", health);
+    server.post("/echo", echo);
+    server.run();
+}
 ```
 
 A handler gets the request as a `sc::rest_request`: `method`, `path` (without
@@ -31,15 +37,17 @@ plus two parsed forms:
   It is `null` otherwise, or when the body doesn't parse.
 
 ```cpp
-server.post("/orders", [](const sc::rest_request &request) {
-    // POST /orders?dry_run=1  {"item": "book", "count": 2}
+// POST /orders?dry_run=1  {"item": "book", "count": 2}
+sc::rest_response order(const sc::rest_request &request) {
     const bool dry_run = request.query.value("dry_run", "0") == "1";
-    if (!request.json.is_object()) return sc::rest_response{400, R"({"error":"JSON object expected"})", sc::content_type::json};
+    if (!request.json.is_object()) return {400, R"({"error":"JSON object expected"})", sc::content_type::json};
     const auto item = request.json.value("item", "");
     const int count = request.json.value("count", 1);
     // ...
-    return sc::rest_response{dry_run ? 200 : 201, R"({"ok":true})", sc::content_type::json};
-});
+    return {dry_run ? 200 : 201, R"({"ok":true})", sc::content_type::json};
+}
+
+server.post("/orders", order);
 ```
 
 A response's content type is `text` (`text/plain; charset=utf-8`) unless the
@@ -47,12 +55,17 @@ handler says otherwise, with a `sc::content_type` or any `Content-Type` value as
 string. The body is bytes, so a binary body may contain zero bytes:
 
 ```cpp
-server.get("/report.csv", [](const sc::rest_request &) {
-    return sc::rest_response{200, "name,kind\nsimply-cpp,library\n", sc::content_type::csv};
-});
-server.get("/logo.svg", [svg = sc::file_get_contents("logo.svg")](const sc::rest_request &) {
-    return sc::rest_response{200, svg, "image/svg+xml"};
-});
+sc::rest_response report(const sc::rest_request &) {
+    return {200, "name,kind\nsimply-cpp,library\n", sc::content_type::csv};
+}
+
+sc::rest_response logo(const sc::rest_request &) {
+    static const auto svg = sc::file_get_contents("logo.svg"); // read once
+    return {200, svg, "image/svg+xml"};
+}
+
+server.get("/report.csv", report);
+server.get("/logo.svg", logo);
 ```
 
 | `sc::content_type` | `Content-Type` |
@@ -200,17 +213,19 @@ Configure JWT before registering protected routes. The application supplies
 credential validation; credentials are not built into the module.
 
 ```cpp
+// The subject for the tokens' "sub" claim, such as the user's id; "" refuses the login.
+std::string login(const std::string_view username, const std::string_view password) {
+    if (const auto user = find_user(username, password)) return std::to_string(user->id);
+    return {};
+}
+
 server.configure_jwt({
     .secret = jwt_secret,
     .access_token_lifetime = std::chrono::minutes{5},
     .refresh_token_lifetime = std::chrono::hours{3},
-    // The subject for the tokens' "sub" claim, such as the user's id; "" refuses the login.
-    .validate_credentials = [](std::string_view username, std::string_view password) -> std::string {
-        if (const auto user = find_user(username, password)) return std::to_string(user->id);
-        return {};
-    },
+    .validate_credentials = login,
 });
-server.bearer_get("/account", account_handler);
+server.bearer_get("/account", account);
 ```
 
 This registers `POST /create_token`, accepting JSON `username` and `password`,
@@ -226,10 +241,12 @@ A refreshed access token gets the refreshing client's address; the refresh
 token keeps the one it was first issued to. It is `null` for routes that aren't protected.
 
 ```cpp
-server.bearer_get("/account", [](const sc::rest_request &request) {
+sc::rest_response account(const sc::rest_request &request) {
     const auto username = request.claims.at("sub").get<std::string>();
-    return sc::rest_response{200, "Hello " + username};
-});
+    return {200, "Hello " + username};
+}
+
+server.bearer_get("/account", account);
 ```
 
 The integration test requires `SC_REST_SERVER_TEST_JWT_SECRET` in the
