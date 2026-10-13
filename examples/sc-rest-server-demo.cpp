@@ -5,11 +5,13 @@
 // Listens on SC_REST_SERVER_DEMO_SERVER (one IPv4 host[:port]); unset or empty means
 // 127.0.0.1:18080, and an invalid value is an error.
 
+#include <functional>
 #include <iostream>
-#include <string>
-#include <stdexcept>
-#include <thread>
 #include <random>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
@@ -45,6 +47,63 @@ namespace {
     };
 }
 
+// [readme]
+namespace {
+    // GET /hello: plain text.
+    sc::rest_response hello(const sc::rest_request &) {
+        return {200, "Hello World!"};
+    }
+
+    // POST /echo: the request back as JSON. request.query is the query string as JSON, and
+    // request.json a JSON body as JSON.
+    sc::rest_response echo(const sc::rest_request &request) {
+        const nlohmann::json response{
+            {"Path", request.path},
+            {"Query", request.query},
+            {"Post", request.json}
+        };
+        return {200, response.dump(2), sc::content_type::json};
+    }
+
+    // POST /create_token's check: the "sub" for the tokens (a user id, say), or "" to refuse the
+    // login. Check your user store here.
+    std::string login(const std::string_view username, const std::string_view password) {
+        return username == password ? std::string{"102034"} : std::string{};
+    }
+
+    // GET /account, with a bearer token. request.claims is the verified token's payload: "sub"
+    // is who logged in, "source" the IP address the token was issued to, "exp" when it expires
+    // (Unix time).
+    sc::rest_response account(const sc::rest_request &request) {
+        const auto expires = sc::datetime::from_unix(request.claims.at("exp").get<long long>());
+        const nlohmann::json details{
+            {"account", request.claims.at("sub")},
+            {"source", request.claims.at("source")},
+            {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}
+        };
+        return {200, details.dump(), sc::content_type::json};
+    }
+
+    // Every route, and the JWT bearer authentication, on the server (before it runs).
+    void register_routes(sc::rest_server &server) {
+        server.get("/hello", hello);
+        server.post("/echo", echo);
+
+        // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
+        server.configure_jwt({.secret = random_secret(), .validate_credentials = login});
+        server.bearer_get("/account", account);
+    }
+
+    // Serves until stop(). run() blocks, so this runs on a thread of its own.
+    void serve(sc::rest_server &server) {
+        try {
+            server.run();
+        } catch (const std::exception &error) {
+            std::cerr << "sc-rest-server-demo: " << error.what() << '\n';
+        }
+    }
+}
+
 int main() {
     try {
         const auto endpoint = sc::ip_endpoint::parse(sc::getenv("SC_REST_SERVER_DEMO_SERVER", "127.0.0.1"), 18080);
@@ -52,52 +111,11 @@ int main() {
         sc::console::title("simply-cpp rest-server: a server and its client in one program");
         sc::console::output() << "The server listens on " << base_url << "  (SC_REST_SERVER_DEMO_SERVER)\n";
 
-        // [readme]
         sc::timer sw;
         sc::rest_server server{endpoint};
-        server.get("/hello", [](const sc::rest_request &) {
-            return sc::rest_response{200, "Hello World!"};
-        });
-        server.post("/echo", [](const sc::rest_request &request) {
-            // request.query is the query string as JSON, request.json a JSON body as JSON.
-            nlohmann::json response{
-                {"Path", request.path},
-                {"Query", request.query},
-                {"Post", request.json}
-            };
-            return sc::rest_response{200, response.dump(2), sc::content_type::json};
-        });
+        register_routes(server);
 
-        // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
-        server.configure_jwt({
-            .secret = random_secret(),
-            // Returns the "sub" for the tokens (a user id, say), or "" to refuse the login.
-            .validate_credentials = [](const std::string_view username, const std::string_view password) {
-                return username == password ? std::string{"102034"} : std::string{}; // check your user store here
-            },
-        });
-        server.bearer_get("/account", [](const sc::rest_request &request) {
-            // request.claims is the verified token's payload: "sub" is who logged in, "source"
-            // the IP address the token was issued to, "exp" when it expires (Unix time).
-            const auto expires = sc::datetime::from_unix(request.claims.at("exp").get<long long>());
-            const nlohmann::json account{
-                {"account", request.claims.at("sub")},
-                {"source", request.claims.at("source")},
-                {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}
-            };
-            return sc::rest_response{200, account.dump(), sc::content_type::json};
-        });
-
-        // run() blocks until stop(), so it gets its own thread.
-        std::thread server_thread{
-            [&server] {
-                try {
-                    server.run();
-                } catch (const std::exception &error) {
-                    std::cerr << "sc-rest-server-demo: " << error.what() << '\n';
-                }
-            }
-        };
+        std::thread server_thread{serve, std::ref(server)};
         const server_thread_guard guard{server, server_thread};
         if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
