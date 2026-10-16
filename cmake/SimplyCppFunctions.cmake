@@ -24,7 +24,7 @@ elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-set(SC_HELPERS_VERSION 24)
+set(SC_HELPERS_VERSION 25)
 set(SC_VERSION_FILE "VERSION.txt")
 set(SC_VERSION_DEFAULT "1.0.0")
 
@@ -470,6 +470,18 @@ function(package_sc_module)
         set(CPACK_DEBIAN_RUNTIME_PACKAGE_DEPENDS "${ARG_DEPENDS_LIST}")
         # set(CPACK_DEBIAN_DEVELOPMENT_PACKAGE_DEPENDS "${ARG_DEPENDS_LIST}")
     endif ()
+    # The licence, where Debian keeps one: /usr/share/doc/<package>/copyright, in both packages.
+    # sc::params' --license-text reads it (sc_program_info()).
+    sc_license_file(license_file)
+    if (license_file)
+        install(FILES "${license_file}" DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${SC_PACKAGE_NAME}
+                RENAME copyright COMPONENT runtime)
+        install(FILES "${license_file}" DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${SC_PACKAGE_NAME}-dev
+                RENAME copyright COMPONENT development)
+    endif ()
+    if (PROJECT_HOMEPAGE_URL)
+        set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "${PROJECT_HOMEPAGE_URL}")
+    endif ()
     set(development_depends "${SC_PACKAGE_NAME} (= ${CPACK_PACKAGE_VERSION})")
     if (ARG_DEV_DEPENDS)
         list(APPEND development_depends ${ARG_DEV_DEPENDS})
@@ -544,7 +556,142 @@ function(add_sc_example name)
 
     add_executable(${name} "${ARG_SOURCE}")
     target_link_libraries(${name} PRIVATE ${ARG_LINK_LIBRARIES})
+    sc_program_info(${name}) # --license and --license-text for a demo that uses sc::params
     install(TARGETS ${name} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT runtime)
+endfunction()
+
+# sc_package_name(<out>)
+# The runtime package's name: simply-cpp for sc-core, simply-cpp-<module> for a module, else the
+# project's name (an app such as oneapi).
+function(sc_package_name out)
+    if (SC_MODULE STREQUAL "core")
+        set(${out} simply-cpp PARENT_SCOPE)
+    elseif (SC_MODULE)
+        set(${out} simply-cpp-${SC_MODULE} PARENT_SCOPE)
+    else ()
+        set(${out} ${PROJECT_NAME} PARENT_SCOPE)
+    endif ()
+endfunction()
+
+# sc_license_file(<out>)
+# The project's licence file (LICENSE, LICENSE.txt, LICENSE.md or COPYING), "" when it has none.
+function(sc_license_file out)
+    foreach (candidate LICENSE LICENSE.txt LICENSE.md COPYING)
+        if (EXISTS "${PROJECT_SOURCE_DIR}/${candidate}")
+            set(${out} "${PROJECT_SOURCE_DIR}/${candidate}" PARENT_SCOPE)
+            return()
+        endif ()
+    endforeach ()
+    set(${out} "" PARENT_SCOPE)
+endfunction()
+
+# sc_license_name(<out> <file>)
+# The licence's SPDX name from the start of its text ("Apache-2.0", "AGPL-3.0", "MIT", ...), or
+# "see <file name>" when it isn't one of the common ones.
+function(sc_license_name out file)
+    file(READ "${file}" head LIMIT 4000)
+    string(TOUPPER "${head}" head)
+    string(REGEX REPLACE "[ \t\r\n]+" " " head "${head}")
+    get_filename_component(file_name "${file}" NAME)
+    set(name "see ${file_name}")
+    if (head MATCHES "GNU AFFERO GENERAL PUBLIC LICENSE")
+        set(name AGPL-3.0)
+    elseif (head MATCHES "GNU LESSER GENERAL PUBLIC LICENSE")
+        if (head MATCHES "VERSION 2\\.1")
+            set(name LGPL-2.1)
+        else ()
+            set(name LGPL-3.0)
+        endif ()
+    elseif (head MATCHES "GNU GENERAL PUBLIC LICENSE")
+        if (head MATCHES "VERSION 2,")
+            set(name GPL-2.0)
+        else ()
+            set(name GPL-3.0)
+        endif ()
+    elseif (head MATCHES "APACHE LICENSE" AND head MATCHES "VERSION 2\\.0")
+        set(name Apache-2.0)
+    elseif (head MATCHES "MOZILLA PUBLIC LICENSE" AND head MATCHES "VERSION 2\\.0")
+        set(name MPL-2.0)
+    elseif (head MATCHES "MIT LICENSE" OR head MATCHES "PERMISSION IS HEREBY GRANTED, FREE OF CHARGE")
+        set(name MIT)
+    elseif (head MATCHES "REDISTRIBUTION AND USE IN SOURCE AND BINARY FORMS")
+        set(name BSD)
+    elseif (head MATCHES "THIS IS FREE AND UNENCUMBERED SOFTWARE")
+        set(name Unlicense)
+    endif ()
+    set(${out} "${name}" PARENT_SCOPE)
+endfunction()
+
+# sc_program_info(<target> [LICENSE <name>] [URL <url>] [TEXT_URL <url>])
+# Records the project's licence in the program at compile time, for sc::params' --license and
+# --license-text (params.h). It generates a header with the licence's name, where to read it and
+# where to fetch its text, and the files that may hold the text: the copyright file the package
+# installs (package_sc_module()), and the source's LICENSE. The name comes from the LICENSE file,
+# the link from the project's HOMEPAGE_URL (or else its git remote): on GitHub, the LICENSE of
+# this version's tag (v<version>), else spdx.org's page for the licence. Without a licence file
+# (and no LICENSE given), nothing is recorded and the program has no licence options.
+function(sc_program_info target)
+    cmake_parse_arguments(ARG "" "LICENSE;URL;TEXT_URL" "" ${ARGN})
+    sc_license_file(license_file)
+    set(name "${ARG_LICENSE}")
+    if (NOT name AND license_file)
+        sc_license_name(name "${license_file}")
+    endif ()
+    if (NOT name)
+        return()
+    endif ()
+
+    # Where the project lives: its HOMEPAGE_URL, which deploys keep (they copy the source without
+    # .git), or else its git remote.
+    set(repository "${PROJECT_HOMEPAGE_URL}")
+    if (NOT repository)
+        find_package(Git QUIET)
+        if (GIT_FOUND)
+            execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${PROJECT_SOURCE_DIR}" remote get-url origin
+                    OUTPUT_VARIABLE repository OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        endif ()
+    endif ()
+    string(REGEX REPLACE "^git@github\\.com:" "https://github.com/" repository "${repository}")
+    string(REGEX REPLACE "\\.git$" "" repository "${repository}")
+    set(url "${ARG_URL}")
+    set(text_url "${ARG_TEXT_URL}")
+    if (license_file AND repository MATCHES "^https://github\\.com/([^/]+/[^/]+)$")
+        set(slug "${CMAKE_MATCH_1}")
+        get_filename_component(license_name "${license_file}" NAME)
+        set(ref main)
+        if (SC_VERSION AND NOT SC_VERSION STREQUAL "0.0.0")
+            set(ref "v${SC_VERSION}")
+        endif ()
+        if (NOT url)
+            set(url "${repository}/blob/${ref}/${license_name}")
+        endif ()
+        if (NOT text_url)
+            set(text_url "https://raw.githubusercontent.com/${slug}/${ref}/${license_name}")
+        endif ()
+    elseif (NOT url AND name MATCHES "^[A-Za-z0-9.-]+$")
+        set(url "https://spdx.org/licenses/${name}.html")
+    endif ()
+
+    sc_package_name(package)
+    set(files "\"/usr/share/doc/${package}/copyright\"")
+    if (NOT CMAKE_INSTALL_PREFIX STREQUAL "/usr")
+        string(APPEND files ", \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/doc/${package}/copyright\"")
+    endif ()
+    if (license_file)
+        string(APPEND files ", \"${license_file}\"")
+    endif ()
+    set(directory "${CMAKE_CURRENT_BINARY_DIR}/sc_program_info/${target}")
+    file(CONFIGURE OUTPUT "${directory}/sc_program_info.h" CONTENT [=[
+// Generated by sc_program_info() (SimplyCppFunctions.cmake): the program's licence, for sc::params.
+#pragma once
+
+#define SC_PROGRAM_LICENSE "@name@"
+#define SC_PROGRAM_LICENSE_URL "@url@"
+#define SC_PROGRAM_LICENSE_TEXT_URL "@text_url@"
+static const char *const sc_program_license_files[] = {@files@, nullptr};
+]=] @ONLY)
+    target_include_directories(${target} PRIVATE "${directory}")
+    target_compile_definitions(${target} PRIVATE "SC_PROGRAM_INFO_HEADER=\"sc_program_info.h\"")
 endfunction()
 
 # Sync README.md once, after the whole CMakeLists.txt has been read.
