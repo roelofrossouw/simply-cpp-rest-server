@@ -24,7 +24,7 @@ elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-set(SC_HELPERS_VERSION 25)
+set(SC_HELPERS_VERSION 26)
 set(SC_VERSION_FILE "VERSION.txt")
 set(SC_VERSION_DEFAULT "1.0.0")
 
@@ -426,10 +426,13 @@ function(install_sc_module)
             DESTINATION ${package_destination} COMPONENT development)
 endfunction()
 
-# package_sc_module([DEPENDS ...] [DEV_DEPENDS ...])
-# Set Debian runtime/dev dependency metadata for the generated package.
+# package_sc_module([DEPENDS ...] [DEV_DEPENDS ...] [BREAKS ...] [REPLACES ...] [DEV_BREAKS ...]
+#                   [DEV_REPLACES ...])
+# Set Debian runtime/dev dependency metadata for the generated package. BREAKS and REPLACES (and
+# their DEV_ forms, for the -dev package) let a package take over files another one shipped, or
+# make apt upgrade packages together: "simply-cpp-graphics-dev (<< 3.0.0~)".
 function(package_sc_module)
-    cmake_parse_arguments(ARG "" "" "DEPENDS;DEV_DEPENDS" ${ARGN})
+    cmake_parse_arguments(ARG "" "" "DEPENDS;DEV_DEPENDS;BREAKS;REPLACES;DEV_BREAKS;DEV_REPLACES" ${ARGN})
     # cmake_parse_arguments(ARG "" "" "DEPENDS" ${ARGN})
     if (APPLE)
         set(CODENAME apple)
@@ -488,6 +491,16 @@ function(package_sc_module)
     endif ()
     string(REPLACE ";" ", " development_depends "${development_depends}")
     set(CPACK_DEBIAN_DEVELOPMENT_PACKAGE_DEPENDS "${development_depends}")
+    foreach (field BREAKS REPLACES)
+        if (ARG_${field})
+            string(REPLACE ";" ", " list "${ARG_${field}}")
+            set(CPACK_DEBIAN_RUNTIME_PACKAGE_${field} "${list}")
+        endif ()
+        if (ARG_DEV_${field})
+            string(REPLACE ";" ", " list "${ARG_DEV_${field}}")
+            set(CPACK_DEBIAN_DEVELOPMENT_PACKAGE_${field} "${list}")
+        endif ()
+    endforeach ()
     include(CPack)
 endfunction()
 
