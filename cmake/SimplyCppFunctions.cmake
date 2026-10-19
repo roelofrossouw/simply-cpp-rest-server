@@ -24,7 +24,7 @@ elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-set(SC_HELPERS_VERSION 26)
+set(SC_HELPERS_VERSION 27)
 set(SC_VERSION_FILE "VERSION.txt")
 set(SC_VERSION_DEFAULT "1.0.0")
 
@@ -482,6 +482,11 @@ function(package_sc_module)
         install(FILES "${license_file}" DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${SC_PACKAGE_NAME}-dev
                 RENAME copyright COMPONENT development)
     endif ()
+    # The Apache License asks that its NOTICE go along with the work.
+    if (EXISTS "${PROJECT_SOURCE_DIR}/NOTICE")
+        install(FILES "${PROJECT_SOURCE_DIR}/NOTICE" DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${SC_PACKAGE_NAME} COMPONENT runtime)
+        install(FILES "${PROJECT_SOURCE_DIR}/NOTICE" DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/${SC_PACKAGE_NAME}-dev COMPONENT development)
+    endif ()
     if (PROJECT_HOMEPAGE_URL)
         set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "${PROJECT_HOMEPAGE_URL}")
     endif ()
@@ -577,7 +582,9 @@ endfunction()
 # The runtime package's name: simply-cpp for sc-core, simply-cpp-<module> for a module, else the
 # project's name (an app such as oneapi).
 function(sc_package_name out)
-    if (SC_MODULE STREQUAL "core")
+    if (CPACK_PACKAGE_NAME)
+        set(${out} ${CPACK_PACKAGE_NAME} PARENT_SCOPE) # an app's own (html2pdf, oneapi)
+    elseif (SC_MODULE STREQUAL "core")
         set(${out} simply-cpp PARENT_SCOPE)
     elseif (SC_MODULE)
         set(${out} simply-cpp-${SC_MODULE} PARENT_SCOPE)
@@ -685,6 +692,24 @@ function(sc_program_info target)
         set(url "https://spdx.org/licenses/${name}.html")
     endif ()
 
+    # The copyright: the first year and owner in the project's NOTICE ("Copyright 2026 Roelof
+    # Rossouw"), on to the year it's built; none without a NOTICE.
+    set(copyright "")
+    if (EXISTS "${PROJECT_SOURCE_DIR}/NOTICE")
+        file(STRINGS "${PROJECT_SOURCE_DIR}/NOTICE" notice_lines REGEX "^Copyright [0-9][0-9][0-9][0-9]")
+        list(GET notice_lines 0 notice_line)
+        if (notice_line MATCHES "^Copyright ([0-9][0-9][0-9][0-9])(-[0-9][0-9][0-9][0-9])? (.+)$")
+            set(since "${CMAKE_MATCH_1}")
+            set(owner "${CMAKE_MATCH_3}")
+            string(TIMESTAMP now "%Y")
+            set(years "${since}")
+            if (now GREATER since)
+                set(years "${since}-${now}")
+            endif ()
+            set(copyright "Copyright ${years} ${owner}")
+        endif ()
+    endif ()
+
     sc_package_name(package)
     set(files "\"/usr/share/doc/${package}/copyright\"")
     if (NOT CMAKE_INSTALL_PREFIX STREQUAL "/usr")
@@ -702,6 +727,7 @@ function(sc_program_info target)
 #define SC_PROGRAM_LICENSE_URL "@url@"
 #define SC_PROGRAM_LICENSE_TEXT_URL "@text_url@"
 static const char *const sc_program_license_files[] = {@files@, nullptr};
+#define SC_PROGRAM_COPYRIGHT "@copyright@"
 ]=] @ONLY)
     target_include_directories(${target} PRIVATE "${directory}")
     target_compile_definitions(${target} PRIVATE "SC_PROGRAM_INFO_HEADER=\"sc_program_info.h\"")

@@ -56,13 +56,14 @@ built_debs=()
 for deb in "$PWD"/*.deb; do [ -f "$deb" ] && built_debs+=("$deb"); done
 popd || exit
 
-debfile="${module/sc-/simply-cpp-}"
-debfile="${debfile/-cpp-core/-cpp}"
-echo "Updating repository $debfile $version"
+echo "Updating repository $module $version"
 pushd /var/www/build/repo || exit
 export GNUPGHOME=/var/www/build/signing
-reprepro remove $ubuntu_codename $debfile
-reprepro remove $ubuntu_codename $debfile-dev
+# The packages this run built, by their own names (an app's isn't its module's: html2pdf, not
+# simply-cpp-html2pdf, which removing would have taken from the repository).
+for deb in "${built_debs[@]}"; do
+    reprepro remove $ubuntu_codename "$(dpkg-deb -f "$deb" Package)"
+done
 reprepro list $ubuntu_codename
 install -d ../debs/processed
 for deb in "${built_debs[@]}"; do
