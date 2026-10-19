@@ -24,7 +24,7 @@ elseif (UNIX)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 endif ()
 
-set(SC_HELPERS_VERSION 28)
+set(SC_HELPERS_VERSION 29)
 set(SC_VERSION_FILE "VERSION.txt")
 set(SC_VERSION_DEFAULT "1.0.0")
 
@@ -164,9 +164,23 @@ macro(find_or_install_package package apt_name brew_name)
             execute_process(COMMAND brew install ${brew_name} RESULT_VARIABLE SC_PACKAGE_INSTALL_RESULT)
         endif ()
 
-        # Re-check the package that was asked for.
-        sc_find_package_any_case(${package} ${SC_PACKAGE_ARGS})
+        # Re-check the package that was asked for, at the version asked for: what apt or brew had
+        # may be older than that (a release not published yet).
+        sc_find_package_any_case(${package} ${ARGN})
         if (NOT ${package}_FOUND)
+            set(SC_PACKAGE_WANTED "")
+            set(SC_PACKAGE_EXTRA ${ARGN}) # a macro's ARGN isn't a variable if() or list() can read
+            if (SC_PACKAGE_EXTRA)
+                list(GET SC_PACKAGE_EXTRA 0 SC_PACKAGE_WANTED)
+                if (NOT SC_PACKAGE_WANTED MATCHES "^[0-9]")
+                    set(SC_PACKAGE_WANTED "")
+                endif ()
+            endif ()
+            sc_find_package_any_case(${package} ${SC_PACKAGE_ARGS}) # any version: which there is
+            if (${package}_FOUND AND SC_PACKAGE_WANTED)
+                message(FATAL_ERROR "${package} ${${package}_VERSION} is installed, but ${PROJECT_NAME} needs"
+                        " ${SC_PACKAGE_WANTED} or later: install a newer ${apt_name} (or build ${package} and install it)")
+            endif ()
             message(FATAL_ERROR "Failed to install or locate ${package}"
                     " (install result=${SC_PACKAGE_INSTALL_RESULT})")
         endif ()
