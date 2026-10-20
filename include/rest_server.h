@@ -152,6 +152,11 @@ namespace sc {
         // server in the process; may be called before or while one runs.
         static void log_level(sc::log_level level);
 
+        // Marks a route added before as deprecated in the documentation (since 1.4.0): Swagger UI
+        // shows it struck through, and the list at / says what to use instead ("GET /gps/{device}").
+        // It still works. Throws std::invalid_argument for a route that isn't there. Before run().
+        void deprecated(const std::string &method, const std::string &path, std::string replacement = {});
+
         // Usage figures (since 1.3.0), kept from the start: requests by method, route (the
         // registered pattern, "unmatched" for a path no route has) and status; how long they
         // took (a histogram) and the bytes they sent; requests and errors by client address (the
