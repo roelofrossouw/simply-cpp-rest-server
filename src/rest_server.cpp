@@ -111,10 +111,27 @@ namespace {
 
     std::mutex environment_mutex;
     std::size_t environment_users = 0;
+    sc::log_level oatpp_level = sc::log_level::warning; // rest_server::log_level()
+
+    // oatpp's priorities that a level shows: errors, warnings, info, then debug and verbose.
+    v_uint32 oatpp_mask(const sc::log_level level) {
+        using logger = oatpp::base::DefaultLogger;
+        v_uint32 mask = 0;
+        if (level >= sc::log_level::error) mask |= 1 << logger::PRIORITY_E;
+        if (level >= sc::log_level::warning) mask |= 1 << logger::PRIORITY_W;
+        if (level >= sc::log_level::info) mask |= 1 << logger::PRIORITY_I;
+        if (level >= sc::log_level::debug) mask |= (1 << logger::PRIORITY_D) | (1 << logger::PRIORITY_V);
+        return mask;
+    }
 
     void acquire_environment() {
         const std::lock_guard lock{environment_mutex};
-        if (environment_users++ == 0) oatpp::base::Environment::init();
+        if (environment_users++ == 0) {
+            // Not oatpp's default, which shows its debug messages too ("assignThreadToCpu ... error
+            // code - 22" where a container doesn't let it pin threads).
+            oatpp::base::Environment::init(std::make_shared<oatpp::base::DefaultLogger>(
+                oatpp::base::DefaultLogger::Config{"%Y-%m-%d %H:%M:%S", true, oatpp_mask(oatpp_level)}));
+        }
     }
 
     void release_environment() {
@@ -902,6 +919,21 @@ void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::s
 
 void sc::rest_server::documentation(const bool served) {
     implementation_->documentation(served);
+}
+
+void sc::rest_server::log_level(const sc::log_level level) {
+    const std::lock_guard lock{environment_mutex};
+    oatpp_level = level;
+    if (environment_users == 0) return; // taken up when the first server starts
+    if (const auto logger = std::dynamic_pointer_cast<oatpp::base::DefaultLogger>(oatpp::base::Environment::getLogger())) {
+        const auto mask = oatpp_mask(level);
+        for (const v_uint32 priority: {oatpp::base::DefaultLogger::PRIORITY_V, oatpp::base::DefaultLogger::PRIORITY_D,
+                                       oatpp::base::DefaultLogger::PRIORITY_I, oatpp::base::DefaultLogger::PRIORITY_W,
+                                       oatpp::base::DefaultLogger::PRIORITY_E}) {
+            if (mask & (1u << priority)) logger->enablePriority(priority);
+            else logger->disablePriority(priority);
+        }
+    }
 }
 
 void sc::rest_server::show_usage(const bool served) {
