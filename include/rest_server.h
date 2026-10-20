@@ -105,7 +105,23 @@ namespace sc {
         void post(std::string path, rest_handler handler);
         void bearer_get(std::string path, rest_handler handler);
         void bearer_post(std::string path, rest_handler handler);
+        // The same, with a description for the API's documentation (since 1.2.0).
+        void get(std::string path, rest_handler handler, std::string description);
+        void post(std::string path, rest_handler handler, std::string description);
+        void bearer_get(std::string path, rest_handler handler, std::string description);
+        void bearer_post(std::string path, rest_handler handler, std::string description);
         void configure_jwt(jwt_configuration configuration);
+
+        // The API's documentation, made from the routes (since 1.2.0), served unless turned off:
+        //   GET /              a plain list: each route's method, path, whether it needs a token,
+        //                      and its description
+        //   GET /openapi.json  the same as an OpenAPI 3.0 document (for Swagger UI, Postman, ...)
+        //   GET /docs          Swagger UI on that document (loaded from a CDN by the browser)
+        // Any other path answers 404 with that list. A route of the program's own at one of those
+        // paths is kept instead. Before run().
+        void documentation(bool served);
+        // The title, version and description the documentation gives the API.
+        void api_info(std::string title, std::string version = {}, std::string description = {});
 
         // Serves requests until stop() is called, usually from another thread.
         void run();
