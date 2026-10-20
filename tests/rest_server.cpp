@@ -136,6 +136,13 @@ int main() {
     };
     server.get("/inspect", inspect);
     server.post("/inspect", inspect);
+    // {name} segments: the route matches any value there, and the handler gets them decoded.
+    const auto located = [](const sc::rest_request &request) {
+        return sc::rest_response{200, json{{"parameters", request.parameters}, {"path", request.path}}.dump(), sc::content_type::json};
+    };
+    server.get("/tel/location/{lat}/{lng}", located, "A place's name");
+    server.get("/tel/gps/{device}", located);
+    server.get("/tel/gps", located);
     server.get("/claims", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
     });
@@ -183,6 +190,21 @@ int main() {
         CHECK(query["e"] == json({"3"}));
         CHECK_EQ(query["q"].get<std::string>(), std::string{"=&"});
         CHECK_EQ(query.size(), std::size_t{7}); // the nameless =x and the empty pair are skipped
+    }
+
+    SECTION("Path parameters: {name} segments, decoded; the plain path still its own route");
+    {
+        const auto place = response_body(request(port, "GET", "/tel/location/-27.960415/28.9749"));
+        CHECK_EQ(place["parameters"]["lat"].get<std::string>(), std::string{"-27.960415"});
+        CHECK_EQ(place["parameters"]["lng"].get<std::string>(), std::string{"28.9749"});
+        CHECK_EQ(place["path"].get<std::string>(), std::string{"/tel/location/-27.960415/28.9749"});
+        const auto device = response_body(request(port, "GET", "/tel/gps/a%20b+c?x=1"));
+        CHECK_EQ(device["parameters"]["device"].get<std::string>(), std::string{"a b+c"}); // a path keeps its +
+        const auto plain = response_body(request(port, "GET", "/tel/gps"));
+        CHECK(plain["parameters"].is_object() && plain["parameters"].empty());
+        CHECK(request(port, "GET", "/tel/location/1").starts_with("HTTP/1.1 404")); // a segment short
+        const auto none = response_body(request(port, "GET", "/inspect"));
+        CHECK(!none.contains("parameters") || none["parameters"].empty());
     }
 
     SECTION("A JSON body as JSON");
@@ -283,6 +305,11 @@ int main() {
         CHECK(!document["paths"]["/health"]["get"].contains("security"));
         CHECK(document["paths"]["/create_token"]["post"]["requestBody"]["content"]["application/json"]["schema"]["properties"].contains("password"));
         CHECK_EQ(document["components"]["securitySchemes"]["bearer"]["scheme"].get<std::string>(), std::string{"bearer"});
+        const auto &located = document["paths"]["/tel/location/{lat}/{lng}"]["get"]["parameters"];
+        CHECK_EQ(located.size(), std::size_t{2});
+        CHECK_EQ(located[0]["name"].get<std::string>(), std::string{"lat"});
+        CHECK_EQ(located[1]["in"].get<std::string>(), std::string{"path"});
+        CHECK(!document["paths"]["/tel/gps"]["get"].contains("parameters"));
 
         const auto page = request(port, "GET", "/docs");
         CHECK(page.starts_with("HTTP/1.1 200"));

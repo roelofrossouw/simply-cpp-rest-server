@@ -28,8 +28,13 @@ int main() {
 
 A handler gets the request as a `sc::rest_request`: `method`, `path` (without
 the query string), `body`, `authorization`, `remote_address` and `content_type`,
-plus two parsed forms:
+plus three parsed forms:
 
+- `parameters`: the values of the route's `{name}` segments, `%XX` decoded
+  (since 1.3.0). A route `"/vms/locus/{device}"` matches `/vms/locus/100000002623`
+  and gets `{"device": "100000002623"}`; each `{name}` takes one whole segment,
+  and routes are tried in the order they were added. The OpenAPI document lists
+  them as path parameters.
 - `query`: the query string as a JSON object of decoded strings; a name given
   more than once, or ending in `[]`, is a list. `query_string` keeps the raw text.
 - `json`: the body as JSON, when the `Content-Type` is JSON (`application/json`
@@ -48,6 +53,13 @@ sc::rest_response order(const sc::rest_request &request) {
 }
 
 server.post("/orders", order);
+
+// GET /tel/location/-27.96/28.97
+server.get("/tel/location/{lat}/{lng}", [](const sc::rest_request &request) {
+    const auto lat = std::stod(request.parameters["lat"].get<std::string>());
+    // ...
+    return sc::rest_response{200, R"({"ok":true})", sc::content_type::json};
+});
 ```
 
 A response's content type is `text` (`text/plain; charset=utf-8`) unless the

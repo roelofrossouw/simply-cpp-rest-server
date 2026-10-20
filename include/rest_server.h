@@ -35,6 +35,10 @@ namespace sc {
         // there is no Content-Type and the body is a JSON object or array. null otherwise, or
         // when it doesn't parse; body always holds the text.
         nlohmann::json json;
+        // The values of the route's {name} segments, %XX decoded: {"device": "100000002623"} for
+        // GET /vms/locus/100000002623 on the route "/vms/locus/{device}" (since 1.3.0). Empty
+        // for a route without them.
+        nlohmann::json parameters = nlohmann::json::object();
     };
 
     // The usual response content types. Any other can still be given as a string (rest_content_type).
@@ -101,6 +105,9 @@ namespace sc {
         rest_server(const rest_server &) = delete;
         rest_server &operator=(const rest_server &) = delete;
 
+        // Routes match the path exactly, except a {name} segment, which matches any one segment
+        // and hands its value to the handler in rest_request::parameters: "/vms/locus/{device}"
+        // (since 1.3.0). Routes are tried in the order they were added.
         void get(std::string path, rest_handler handler);
         void post(std::string path, rest_handler handler);
         void bearer_get(std::string path, rest_handler handler);
