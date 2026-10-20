@@ -328,7 +328,7 @@ int main() {
         CHECK(text.find("{lat}  degrees north") != std::string::npos);
         CHECK(!document["paths"]["/tel/gps"]["get"].contains("parameters"));
         CHECK(document["paths"]["/tel/gps"]["get"]["deprecated"].get<bool>());
-        CHECK_EQ(document["paths"]["/tel/gps"]["get"]["description"].get<std::string>(), std::string{"Deprecated: use GET /gps instead."});
+        CHECK_EQ(document["paths"]["/tel/gps"]["get"]["description"].get<std::string>(), std::string{"Deprecated: use GET /gps."});
         CHECK(!document["paths"]["/health"]["get"].contains("deprecated"));
         CHECK(text.find("GET  /tel/gps                   (deprecated: use GET /gps)") != std::string::npos ||
               text.find("(deprecated: use GET /gps)") != std::string::npos);
