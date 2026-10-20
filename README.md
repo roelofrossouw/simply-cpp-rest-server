@@ -257,6 +257,23 @@ GET  /hello          A greeting, as plain text
 ...
 ```
 
+Routes can document their parameters too (since 1.4.0), as a last argument: a
+name like one of the path's `{segments}` describes that path parameter, any other
+a query parameter. Swagger UI then shows a field for each, filled with the
+example:
+
+```cpp
+server.get("/vms/loci/{device}", loci, "A device's positions, newest first", {
+    {.name = "device", .description = "the VMS device", .example = "100000002955"},
+    {.name = "before", .description = "up to this time (default now)", .example = "202610011500"},
+    {.name = "limit", .description = "how many (10; at most 1000)", .type = sc::rest_parameter_type::integer, .example = "10"},
+});
+```
+
+The list at `/` shows them under the route (`?limit=  how many ...`). The
+documentation only describes them: the handler still reads `request.query` and
+`request.parameters`, and checks what it gets.
+
 A route of the program's own at `/`, `/openapi.json` or `/docs` is kept instead of the
 documentation's; `server.documentation(false)` (before `run()`) leaves all of it out, the 404s
 then plain.
