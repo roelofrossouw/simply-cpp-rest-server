@@ -140,7 +140,10 @@ int main() {
     const auto located = [](const sc::rest_request &request) {
         return sc::rest_response{200, json{{"parameters", request.parameters}, {"path", request.path}}.dump(), sc::content_type::json};
     };
-    server.get("/tel/location/{lat}/{lng}", located, "A place's name");
+    server.get("/tel/location/{lat}/{lng}", located, "A place's name", {
+        {.name = "lat", .description = "degrees north", .type = sc::rest_parameter_type::number, .example = "-26.96"},
+        {.name = "radius", .description = "metres around it", .type = sc::rest_parameter_type::integer, .example = "500"},
+        {.name = "key", .description = "the caller's key", .required = true}});
     server.get("/tel/gps/{device}", located);
     server.get("/tel/gps", located);
     server.get("/claims", [](const sc::rest_request &request) {
@@ -306,9 +309,22 @@ int main() {
         CHECK(document["paths"]["/create_token"]["post"]["requestBody"]["content"]["application/json"]["schema"]["properties"].contains("password"));
         CHECK_EQ(document["components"]["securitySchemes"]["bearer"]["scheme"].get<std::string>(), std::string{"bearer"});
         const auto &located = document["paths"]["/tel/location/{lat}/{lng}"]["get"]["parameters"];
-        CHECK_EQ(located.size(), std::size_t{2});
+        CHECK_EQ(located.size(), std::size_t{4}); // the path's two, described or not, then the query's
         CHECK_EQ(located[0]["name"].get<std::string>(), std::string{"lat"});
+        CHECK_EQ(located[0]["schema"]["type"].get<std::string>(), std::string{"number"});
+        CHECK_EQ(located[0]["description"].get<std::string>(), std::string{"degrees north"});
+        CHECK_EQ(located[0]["example"].get<std::string>(), std::string{"-26.96"});
+        CHECK_EQ(located[1]["name"].get<std::string>(), std::string{"lng"});
         CHECK_EQ(located[1]["in"].get<std::string>(), std::string{"path"});
+        CHECK(!located[1].contains("description"));
+        CHECK_EQ(located[2]["name"].get<std::string>(), std::string{"radius"});
+        CHECK_EQ(located[2]["in"].get<std::string>(), std::string{"query"});
+        CHECK_EQ(located[2]["schema"]["type"].get<std::string>(), std::string{"integer"});
+        CHECK(!located[2]["required"].get<bool>());
+        CHECK(located[3]["required"].get<bool>());
+        CHECK(text.find("?radius=  metres around it") != std::string::npos);  // listed under the route
+        CHECK(text.find("?key=  the caller's key (required)") != std::string::npos);
+        CHECK(text.find("{lat}  degrees north") != std::string::npos);
         CHECK(!document["paths"]["/tel/gps"]["get"].contains("parameters"));
 
         const auto page = request(port, "GET", "/docs");

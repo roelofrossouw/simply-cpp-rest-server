@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace sc {
     struct rest_request {
@@ -40,6 +41,19 @@ namespace sc {
         // GET /vms/locus/100000002623 on the route "/vms/locus/{device}" (since 1.3.0). Empty
         // for a route without them.
         nlohmann::json parameters = nlohmann::json::object();
+    };
+
+    // What a documented parameter holds, for the OpenAPI document.
+    enum class rest_parameter_type { string, integer, number, boolean };
+
+    // A route's parameter, for its documentation (since 1.4.0): one named like a {segment} of the
+    // path describes that path parameter, any other a query parameter (?name=...).
+    struct rest_parameter {
+        std::string name;
+        std::string description;
+        bool required = false;   // path parameters always are
+        rest_parameter_type type = rest_parameter_type::string;
+        std::string example;     // shown, and filled in, by Swagger UI
     };
 
     // The usual response content types. Any other can still be given as a string (rest_content_type).
@@ -118,6 +132,11 @@ namespace sc {
         void post(std::string path, rest_handler handler, std::string description);
         void bearer_get(std::string path, rest_handler handler, std::string description);
         void bearer_post(std::string path, rest_handler handler, std::string description);
+        // The same, with the route's parameters documented (since 1.4.0).
+        void get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
+        void post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
+        void bearer_get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
+        void bearer_post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void configure_jwt(jwt_configuration configuration);
 
         // The API's documentation, made from the routes (since 1.2.0), served unless turned off:

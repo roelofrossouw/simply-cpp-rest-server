@@ -665,14 +665,18 @@ public:
         description_ = std::move(description);
     }
 
-    void add_route(std::string method, std::string path, rest_handler handler, const bool bearer_required, std::string description = {}) {
+    void add_route(std::string method, std::string path, rest_handler handler, const bool bearer_required, std::string description = {},
+                   std::vector<rest_parameter> parameters = {}) {
         if (path.empty() || path.front() != '/') throw std::invalid_argument("REST route path must start with '/'");
         if (!handler) throw std::invalid_argument("REST route handler must not be empty");
 
         const std::lock_guard lock{mutex_};
         if (server_) throw std::logic_error("REST routes cannot be added after the server starts");
         if (bearer_required && !jwt_) throw std::logic_error("JWT must be configured before adding bearer routes");
-        routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? jwt_ : nullptr, std::move(description)});
+        for (const auto &each: parameters)
+            if (each.name.empty()) throw std::invalid_argument("REST route parameters need a name");
+        routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? jwt_ : nullptr, std::move(description),
+                           std::move(parameters)});
     }
 
     void run() {
@@ -745,6 +749,7 @@ private:
         rest_handler handler;
         std::shared_ptr<const jwt_service> jwt;
         std::string description;
+        std::vector<rest_parameter> parameters;
     };
 
     // GET /usage: the usage figures for Prometheus, or as JSON with ?format=json; unless the
@@ -771,9 +776,10 @@ private:
         struct entry {
             std::string method, path, description;
             bool bearer;
+            std::vector<rest_parameter> parameters;
         };
         std::vector<entry> listed;
-        for (const auto &each: routes_) listed.push_back({each.method, each.path, each.description, each.jwt != nullptr});
+        for (const auto &each: routes_) listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters});
         const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
                                      {"GET", "/openapi.json", "The API as an OpenAPI 3.0 document", false},
                                      {"GET", "/docs", "Swagger UI on /openapi.json", false}};
@@ -792,6 +798,15 @@ private:
             line += std::string(width + 2 - each.path.size(), ' ') + each.description;
             if (each.bearer) line += each.description.empty() ? "(needs a bearer token)" : " (needs a bearer token)";
             help += line + "\n";
+            // Its parameters under it: "  ?limit=  how many (10; at most 1000)"
+            const auto in_path = path_parameters(each.path);
+            for (const auto &parameter: each.parameters) {
+                const bool path = std::ranges::find(in_path, parameter.name) != in_path.end();
+                std::string item = std::string(width + 7, ' ') + (path ? "{" + parameter.name + "}" : "?" + parameter.name + "=");
+                if (!parameter.description.empty()) item += "  " + parameter.description;
+                if (parameter.required && !path) item += " (required)";
+                help += item + "\n";
+            }
         }
         if (jwt_) help += "\nA token comes from POST /create_token; send it as \"Authorization: Bearer <token>\".\n";
 
@@ -802,8 +817,24 @@ private:
             std::ranges::transform(method, method.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
             if (!each.description.empty()) operation["summary"] = each.description;
-            for (const auto &name: path_parameters(each.path)) {
-                operation["parameters"].push_back({{"name", name}, {"in", "path"}, {"required", true}, {"schema", {{"type", "string"}}}});
+            const auto in_path = path_parameters(each.path);
+            const auto described = [&](const std::string &name) -> const rest_parameter * {
+                const auto found = std::ranges::find(each.parameters, name, &rest_parameter::name);
+                return found == each.parameters.end() ? nullptr : &*found;
+            };
+            const auto parameter_json = [](const std::string &name, const bool path, const rest_parameter *about) {
+                static constexpr std::array<const char *, 4> types{"string", "integer", "number", "boolean"};
+                json item{{"name", name}, {"in", path ? "path" : "query"}, {"required", path || (about && about->required)},
+                          {"schema", {{"type", types[static_cast<std::size_t>(about ? about->type : rest_parameter_type::string)]}}}};
+                if (about && !about->description.empty()) item["description"] = about->description;
+                if (about && !about->example.empty()) item["example"] = about->example;
+                return item;
+            };
+            for (const auto &name: in_path) operation["parameters"].push_back(parameter_json(name, true, described(name)));
+            for (const auto &parameter: each.parameters) {
+                if (std::ranges::find(in_path, parameter.name) == in_path.end()) {
+                    operation["parameters"].push_back(parameter_json(parameter.name, false, &parameter));
+                }
             }
             if (each.bearer) {
                 operation["security"] = json::array({{{"bearer", json::array()}}});
@@ -915,6 +946,24 @@ void sc::rest_server::bearer_get(std::string path, rest_handler handler, std::st
 
 void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::string description) {
     implementation_->add_route("POST", std::move(path), std::move(handler), true, std::move(description));
+}
+
+void sc::rest_server::get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters) {
+    implementation_->add_route("GET", std::move(path), std::move(handler), false, std::move(description), std::move(parameters));
+}
+
+void sc::rest_server::post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters) {
+    implementation_->add_route("POST", std::move(path), std::move(handler), false, std::move(description), std::move(parameters));
+}
+
+void sc::rest_server::bearer_get(std::string path, rest_handler handler, std::string description,
+                                 std::vector<rest_parameter> parameters) {
+    implementation_->add_route("GET", std::move(path), std::move(handler), true, std::move(description), std::move(parameters));
+}
+
+void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::string description,
+                                  std::vector<rest_parameter> parameters) {
+    implementation_->add_route("POST", std::move(path), std::move(handler), true, std::move(description), std::move(parameters));
 }
 
 void sc::rest_server::documentation(const bool served) {
