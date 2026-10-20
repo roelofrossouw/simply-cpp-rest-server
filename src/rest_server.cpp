@@ -837,7 +837,7 @@ private:
             if (!each.description.empty()) operation["summary"] = each.description;
             if (each.deprecated) {
                 operation["deprecated"] = true;
-                if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + " instead.";
+                if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + ".";
             }
             const auto in_path = path_parameters(each.path);
             const auto described = [&](const std::string &name) -> const rest_parameter * {
