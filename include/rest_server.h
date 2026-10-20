@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <functional>
 #include <ip_endpoint.h>
+#include <log_level.h>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -127,6 +128,11 @@ namespace sc {
         // Any other path answers 404 with that list. A route of the program's own at one of those
         // paths is kept instead. Before run().
         void documentation(bool served);
+        // What oatpp, underneath, writes to stderr (since 1.3.2): its errors and warnings by default
+        // (sc::log_level::warning); info adds its info messages, debug its debug ones. For every
+        // server in the process; may be called before or while one runs.
+        static void log_level(sc::log_level level);
+
         // Usage figures (since 1.3.0), kept from the start: requests by method, route (the
         // registered pattern, "unmatched" for a path no route has) and status; how long they
         // took (a histogram) and the bytes they sent; requests and errors by client address (the

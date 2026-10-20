@@ -285,6 +285,14 @@ answered, so a request to `/usage` shows in the next one. Without the
 documentation (`documentation(false)`) there is no catch-all, so paths no route
 has get oatpp's plain 404 and aren't counted.
 
+## Logging
+
+oatpp, underneath, writes its errors and warnings to stderr; since 1.3.2 not its
+info and debug messages, which it shows by default (such as `assignThreadToCpu
+... error code - 22` in a container that doesn't let it pin threads).
+`sc::rest_server::log_level(sc::log_level::debug)` brings them back, for every
+server in the process; it can be called before or while one runs.
+
 ## JWT bearer authentication
 
 Configure JWT before registering protected routes. The application supplies

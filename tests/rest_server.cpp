@@ -367,6 +367,10 @@ int main() {
     server.stop();
     server_thread.join();
 
+    SECTION("oatpp's log level, set while running");
+    CHECK_NOTHROW(sc::rest_server::log_level(sc::log_level::debug));
+    CHECK_NOTHROW(sc::rest_server::log_level(sc::log_level::warning));
+
     SECTION("Not running after stop()");
     CHECK(!server.wait_until_running(std::chrono::milliseconds{0}));
 
