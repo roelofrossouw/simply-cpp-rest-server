@@ -123,8 +123,7 @@ namespace sc {
         //   GET /              a plain list: each route's method, path, whether it needs a token,
         //                      and its description
         //   GET /openapi.json  the same as an OpenAPI 3.0 document (for Swagger UI, Postman, ...)
-        //   GET /docs          Swagger UI on that document (loaded from a CDN by the browser); also
-        //                      at GET /swagger
+        //   GET /docs          Swagger UI on that document (loaded from a CDN by the browser)
         // Any other path answers 404 with that list. A route of the program's own at one of those
         // paths is kept instead. Before run().
         void documentation(bool served);
