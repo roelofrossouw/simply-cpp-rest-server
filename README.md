@@ -261,6 +261,30 @@ A route of the program's own at `/`, `/openapi.json` or `/docs` is kept instead 
 documentation's; `server.documentation(false)` (before `run()`) leaves all of it out, the 404s
 then plain.
 
+## Usage figures
+
+The server counts its requests from the start (since 1.3.0) and serves the
+figures at `GET /usage`, in Prometheus' text format, or as JSON with
+`?format=json`:
+
+| Metric | |
+|---|---|
+| `sc_rest_requests_total{method, route, status}` | requests answered; `route` is the registered pattern (`/vms/locus/{device}`), `unmatched` for a path no route has |
+| `sc_rest_request_duration_seconds{method, route}` | a histogram of how long they took (1 ms to 10 s), so Grafana can show a p95 |
+| `sc_rest_response_bytes_total{method, route}` | the response bytes sent |
+| `sc_rest_client_requests_total{client}`, `sc_rest_client_errors_total{client}` | requests, and those answered 4xx or 5xx, by client address: the first 1000 addresses, the rest as `other` |
+| `sc_rest_clients`, `sc_rest_requests_in_flight`, `sc_rest_uptime_seconds` | addresses seen, requests being answered, seconds counted |
+| `sc_rest_info{title, version}` | the `api_info()` title and version, always 1 |
+
+Scrape it with a Prometheus job of `metrics_path: /usage`. `server.show_usage(false)`
+(before `run()`) leaves the route out, as does a `/usage` route of the program's
+own; the figures are still kept, for `server.usage()` (JSON) and
+`server.usage_metrics()` (Prometheus' text), say to add them to a program's own
+metrics. `server.reset_usage()` sets them back to zero. Requests are counted when
+answered, so a request to `/usage` shows in the next one. Without the
+documentation (`documentation(false)`) there is no catch-all, so paths no route
+has get oatpp's plain 404 and aren't counted.
+
 ## JWT bearer authentication
 
 Configure JWT before registering protected routes. The application supplies

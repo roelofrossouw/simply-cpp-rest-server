@@ -327,6 +327,43 @@ int main() {
         CHECK(request(port, "GET", "/health").starts_with("HTTP/1.1 200")); // the real routes still win
     }
 
+    SECTION("Usage: by route pattern and status, timed, by client; for Prometheus and as JSON");
+    {
+        server.reset_usage();
+        (void) request(port, "GET", "/tel/gps/1");
+        (void) request(port, "GET", "/tel/gps/2");
+        (void) request(port, "GET", "/protected");      // 401
+        (void) request(port, "GET", "/no/such/thing");  // the catch-all
+        const auto metrics = request(port, "GET", "/usage");
+        CHECK(metrics.starts_with("HTTP/1.1 200"));
+        CHECK(metrics.find("text/plain; version=0.0.4") != std::string::npos);
+        const auto text = metrics.substr(metrics.find("\r\n\r\n") + 4);
+        const auto has = [&](const std::string &line) {
+            const bool found = text.find(line) != std::string::npos;
+            CHECK_MSG(found, "no \"" + line + "\" in /usage");
+        };
+        has("sc_rest_info{title=\"Test API\",version=\"1.2.3\"} 1\n");
+        has("sc_rest_requests_total{method=\"GET\",route=\"/tel/gps/{device}\",status=\"200\"} 2\n"); // one pattern, not two paths
+        has("sc_rest_requests_total{method=\"GET\",route=\"/protected\",status=\"401\"} 1\n");
+        has("sc_rest_requests_total{method=\"GET\",route=\"unmatched\",status=\"404\"} 1\n");
+        has("sc_rest_request_duration_seconds_bucket{method=\"GET\",route=\"/tel/gps/{device}\",le=\"+Inf\"} 2\n");
+        has("sc_rest_request_duration_seconds_count{method=\"GET\",route=\"/tel/gps/{device}\"} 2\n");
+        has("sc_rest_client_requests_total{client=\"127.0.0.1\"} 4\n"); // the /usage asking now isn't counted yet
+        has("sc_rest_client_errors_total{client=\"127.0.0.1\"} 2\n");
+        has("sc_rest_clients 1\n");
+        has("# TYPE sc_rest_request_duration_seconds histogram\n");
+
+        const auto report = response_body(request(port, "GET", "/usage?format=json"));
+        CHECK_EQ(report["requests"].get<int>(), 5); // and the /usage above
+        CHECK_EQ(report["clients"][0]["address"].get<std::string>(), std::string{"127.0.0.1"});
+        CHECK_EQ(report["routes"][0]["route"].get<std::string>(), std::string{"/tel/gps/{device}"}); // the busiest first
+        CHECK_EQ(report["routes"][0]["by_status"]["200"].get<int>(), 2);
+        CHECK(report["routes"][0]["average_ms"].get<double>() >= 0);
+        CHECK_EQ(server.usage()["requests"].get<int>(), 6); // the same, from the program
+        CHECK(server.usage_metrics().find("sc_rest_uptime_seconds") != std::string::npos);
+        CHECK(request(port, "GET", "/").find("GET  /usage") != std::string::npos); // listed
+    }
+
     server.stop();
     server_thread.join();
 
@@ -338,12 +375,16 @@ int main() {
         const int other_port = available_port();
         sc::rest_server plain{{"127.0.0.1", other_port}};
         plain.documentation(false);
+        plain.show_usage(false);
         plain.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; });
         std::thread serving{[&plain] { plain.run(); }};
         CHECK(plain.wait_until_running());
         CHECK(request(other_port, "GET", "/").starts_with("HTTP/1.1 404"));
         CHECK(request(other_port, "GET", "/openapi.json").starts_with("HTTP/1.1 404"));
         CHECK(request(other_port, "GET", "/health").ends_with("up"));
+        CHECK(request(other_port, "GET", "/usage").starts_with("HTTP/1.1 404")); // not served, still kept:
+        CHECK(plain.usage_metrics().find("route=\"/health\",status=\"200\"} 1") != std::string::npos);
+        CHECK_THROWS_AS(plain.show_usage(true), std::logic_error); // not while running
         plain.stop();
         serving.join();
     }

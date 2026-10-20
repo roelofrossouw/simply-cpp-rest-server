@@ -15,6 +15,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdio>
+#include <ctime>
+#include <map>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
@@ -328,49 +332,231 @@ namespace {
         sc::jwt_configuration configuration_;
     };
 
+    // The usage figures: requests by route and status, how long they took (a histogram), what
+    // they sent, and who asked. Routes are the registered patterns ("/vms/locus/{device}"), so the
+    // figures stay few whatever the paths; clients are counted by address, the first
+    // max_clients of them, the rest together as "other".
+    class usage_stats {
+    public:
+        static constexpr std::array<double, 12> buckets{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10};
+        static constexpr std::size_t max_clients = 1000;
+
+        void begin() { ++in_flight_; }
+
+        void end(const std::string &method, const std::string &route, const int status, const double seconds,
+                 const std::size_t bytes, const std::string &client) {
+            --in_flight_;
+            const std::lock_guard lock{mutex_};
+            auto &figures = routes_[{method, route}];
+            ++figures.by_status[status];
+            ++figures.count;
+            figures.seconds += seconds;
+            figures.max_seconds = std::max(figures.max_seconds, seconds);
+            figures.bytes += bytes;
+            for (std::size_t i = 0; i < buckets.size(); ++i)
+                if (seconds <= buckets[i]) ++figures.in_bucket[i];
+            const auto known = clients_.find(client);
+            auto &who = known != clients_.end() ? known->second : clients_.size() < max_clients ? clients_[client] : other_;
+            ++who.requests;
+            if (status >= 400) ++who.errors;
+            who.last_seen = std::chrono::system_clock::now();
+        }
+
+        void reset() {
+            const std::lock_guard lock{mutex_};
+            routes_.clear();
+            clients_.clear();
+            other_ = {};
+            since_ = std::chrono::system_clock::now();
+        }
+
+        json report() const {
+            const std::lock_guard lock{mutex_};
+            std::uint64_t total = 0;
+            json routes = json::array();
+            for (const auto &[key, figures]: routes_) {
+                json by_status = json::object();
+                for (const auto &[status, count]: figures.by_status) by_status[std::to_string(status)] = count;
+                total += figures.count;
+                routes.push_back({{"method", key.first}, {"route", key.second}, {"requests", figures.count}, {"by_status", by_status},
+                                  {"average_ms", figures.count ? 1000 * figures.seconds / static_cast<double>(figures.count) : 0.0},
+                                  {"max_ms", 1000 * figures.max_seconds}, {"bytes", figures.bytes}});
+            }
+            std::stable_sort(routes.begin(), routes.end(), [](const json &a, const json &b) { return a["requests"] > b["requests"]; });
+            json clients = json::array();
+            const auto add = [&](const std::string &address, const client_figures &who) {
+                clients.push_back({{"address", address}, {"requests", who.requests}, {"errors", who.errors}, {"last_seen", iso(who.last_seen)}});
+            };
+            for (const auto &[address, who]: clients_) add(address, who);
+            if (other_.requests) add("other", other_);
+            std::stable_sort(clients.begin(), clients.end(), [](const json &a, const json &b) { return a["requests"] > b["requests"]; });
+            return {{"since", iso(since_)}, {"uptime_s", uptime()}, {"in_flight", in_flight_.load()}, {"requests", total},
+                    {"clients_seen", clients_.size() + (other_.requests ? 1 : 0)}, {"routes", routes}, {"clients", clients}};
+        }
+
+        // Prometheus' text format (version 0.0.4).
+        std::string metrics(const std::string &title, const std::string &version) const {
+            const std::lock_guard lock{mutex_};
+            std::string out;
+            const auto header = [&](const char *name, const char *type, const char *help) {
+                out += std::string{"# HELP "} + name + " " + help + "\n# TYPE " + name + " " + type + "\n";
+            };
+            const auto number = [](const double value) {
+                char text[32];
+                std::snprintf(text, sizeof text, "%.9g", value);
+                return std::string{text};
+            };
+            header("sc_rest_info", "gauge", "The API's title and version");
+            out += "sc_rest_info{title=\"" + escaped(title) + "\",version=\"" + escaped(version) + "\"} 1\n";
+            header("sc_rest_uptime_seconds", "gauge", "Seconds since the server started or the figures were reset");
+            out += "sc_rest_uptime_seconds " + number(uptime()) + "\n";
+            header("sc_rest_requests_in_flight", "gauge", "Requests being answered now");
+            out += "sc_rest_requests_in_flight " + std::to_string(in_flight_.load()) + "\n";
+            header("sc_rest_requests_total", "counter", "Requests answered, by method, route and status");
+            for (const auto &[key, figures]: routes_)
+                for (const auto &[status, count]: figures.by_status)
+                    out += "sc_rest_requests_total{" + labels(key) + ",status=\"" + std::to_string(status) + "\"} " + std::to_string(count) + "\n";
+            header("sc_rest_request_duration_seconds", "histogram", "How long requests took to answer, by method and route");
+            for (const auto &[key, figures]: routes_) {
+                for (std::size_t i = 0; i < buckets.size(); ++i)
+                    out += "sc_rest_request_duration_seconds_bucket{" + labels(key) + ",le=\"" + number(buckets[i]) + "\"} " +
+                           std::to_string(figures.in_bucket[i]) + "\n";
+                out += "sc_rest_request_duration_seconds_bucket{" + labels(key) + ",le=\"+Inf\"} " + std::to_string(figures.count) + "\n";
+                out += "sc_rest_request_duration_seconds_sum{" + labels(key) + "} " + number(figures.seconds) + "\n";
+                out += "sc_rest_request_duration_seconds_count{" + labels(key) + "} " + std::to_string(figures.count) + "\n";
+            }
+            header("sc_rest_response_bytes_total", "counter", "Response body bytes sent, by method and route");
+            for (const auto &[key, figures]: routes_)
+                out += "sc_rest_response_bytes_total{" + labels(key) + "} " + std::to_string(figures.bytes) + "\n";
+            header("sc_rest_client_requests_total", "counter", "Requests by client address (after the first 1000 addresses, as other)");
+            const auto client = [&](const char *name, const std::string &address, const std::uint64_t value) {
+                out += std::string{name} + "{client=\"" + escaped(address) + "\"} " + std::to_string(value) + "\n";
+            };
+            for (const auto &[address, who]: clients_) client("sc_rest_client_requests_total", address, who.requests);
+            if (other_.requests) client("sc_rest_client_requests_total", "other", other_.requests);
+            header("sc_rest_client_errors_total", "counter", "Requests answered with a 4xx or 5xx status, by client address");
+            for (const auto &[address, who]: clients_) client("sc_rest_client_errors_total", address, who.errors);
+            if (other_.requests) client("sc_rest_client_errors_total", "other", other_.errors);
+            header("sc_rest_clients", "gauge", "Client addresses seen");
+            out += "sc_rest_clients " + std::to_string(clients_.size() + (other_.requests ? 1 : 0)) + "\n";
+            return out;
+        }
+
+    private:
+        struct route_figures {
+            std::map<int, std::uint64_t> by_status;
+            std::array<std::uint64_t, buckets.size()> in_bucket{};
+            std::uint64_t count = 0, bytes = 0;
+            double seconds = 0, max_seconds = 0;
+        };
+        struct client_figures {
+            std::uint64_t requests = 0, errors = 0;
+            std::chrono::system_clock::time_point last_seen{};
+        };
+
+        double uptime() const {
+            return std::chrono::duration<double>(std::chrono::system_clock::now() - since_).count();
+        }
+
+        static std::string iso(const std::chrono::system_clock::time_point time) {
+            const auto seconds = std::chrono::system_clock::to_time_t(time);
+            std::tm parts{};
+            gmtime_r(&seconds, &parts);
+            char text[32];
+            std::strftime(text, sizeof text, "%Y-%m-%dT%H:%M:%SZ", &parts);
+            return text;
+        }
+
+        static std::string escaped(const std::string_view text) {
+            std::string out;
+            for (const char c: text) {
+                if (c == '\\' || c == '"') out += '\\';
+                if (c == '\n') {
+                    out += "\\n";
+                    continue;
+                }
+                out += c;
+            }
+            return out;
+        }
+
+        static std::string labels(const std::pair<std::string, std::string> &key) {
+            return "method=\"" + escaped(key.first) + "\",route=\"" + escaped(key.second) + "\"";
+        }
+
+        mutable std::mutex mutex_;
+        std::atomic<std::int64_t> in_flight_{0};
+        std::chrono::system_clock::time_point since_ = std::chrono::system_clock::now();
+        std::map<std::pair<std::string, std::string>, route_figures> routes_;
+        std::map<std::string, client_figures> clients_;
+        client_figures other_;
+    };
+
     class route_handler final : public oatpp::web::server::HttpRequestHandler {
     public:
-        route_handler(sc::rest_handler handler, std::shared_ptr<const jwt_service> jwt)
-            : handler_(std::move(handler)), jwt_(std::move(jwt)) {
+        // route is what the usage figures call it: the registered path, "unmatched" for the
+        // documentation's catch-all.
+        route_handler(sc::rest_handler handler, std::shared_ptr<const jwt_service> jwt, std::shared_ptr<usage_stats> usage,
+                      std::string route)
+            : handler_(std::move(handler)), jwt_(std::move(jwt)), usage_(std::move(usage)), route_(std::move(route)) {
         }
 
         std::shared_ptr<OutgoingResponse> handle(const std::shared_ptr<IncomingRequest> &request) override {
-            oatpp::String body;
-            if (request->getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH)) {
-                body = request->readBodyToString();
+            const auto started = std::chrono::steady_clock::now();
+            usage_->begin();
+            const auto method = request->getStartingLine().method.std_str();
+            std::string client;
+            int status = 500;
+            std::size_t bytes = 0;
+            std::shared_ptr<OutgoingResponse> outgoing;
+            try {
+                client = remote_address(*request);
+                const auto response = answer(*request, client);
+                outgoing = make_response(response);
+                status = response.status;
+                bytes = response.body.size();
+            } catch (const std::exception &) {
+                outgoing = ResponseFactory::createResponse(Status::CODE_500, "Internal Server Error");
+                bytes = 21;
             }
-            const auto target = request->getStartingLine().path.std_str();
+            usage_->end(method, route_, status, std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(), bytes,
+                        client);
+            return outgoing;
+        }
+
+    private:
+        sc::rest_response answer(IncomingRequest &request, const std::string &client) const {
+            oatpp::String body;
+            if (request.getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH)) {
+                body = request.readBodyToString();
+            }
+            const auto target = request.getStartingLine().path.std_str();
             const auto question = target.find('?');
             sc::rest_request rest_request{
-                request->getStartingLine().method.std_str(),
+                request.getStartingLine().method.std_str(),
                 target.substr(0, question),
                 oat_string(body),
-                oat_string(request->getHeader(oatpp::web::protocol::http::Header::AUTHORIZATION)),
-                remote_address(*request),
+                oat_string(request.getHeader(oatpp::web::protocol::http::Header::AUTHORIZATION)),
+                client,
             };
             if (question != std::string::npos) {
                 rest_request.query_string = target.substr(question + 1);
                 rest_request.query = parse_query(rest_request.query_string);
             }
-            rest_request.content_type = oat_string(request->getHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE));
+            rest_request.content_type = oat_string(request.getHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE));
             rest_request.json = parse_body(rest_request.body, rest_request.content_type);
-            for (const auto &[name, value]: request->getPathVariables().getVariables()) {
+            for (const auto &[name, value]: request.getPathVariables().getVariables()) {
                 rest_request.parameters[name.std_str()] = url_decode(value.std_str(), false);
             }
 
-            try {
-                if (jwt_) {
-                    auto claims = jwt_->access_token_claims(rest_request.authorization);
-                    if (!claims) return make_response({401, R"({"error":"Unauthorized"})", sc::content_type::json});
-                    rest_request.claims = std::move(*claims);
-                }
-                return make_response(handler_(rest_request));
-            } catch (const std::exception &) {
-                return ResponseFactory::createResponse(Status::CODE_500, "Internal Server Error");
+            if (jwt_) {
+                auto claims = jwt_->access_token_claims(rest_request.authorization);
+                if (!claims) return {401, R"({"error":"Unauthorized"})", sc::content_type::json};
+                rest_request.claims = std::move(*claims);
             }
+            return handler_(rest_request);
         }
 
-    private:
         // Needs the provider's extended connections, which record the peer address.
         static std::string remote_address(IncomingRequest &request) {
             const auto connection = request.getConnection();
@@ -394,6 +580,8 @@ namespace {
 
         sc::rest_handler handler_;
         std::shared_ptr<const jwt_service> jwt_;
+        std::shared_ptr<usage_stats> usage_;
+        std::string route_;
     };
 }
 
@@ -433,6 +621,26 @@ public:
         documented_ = served;
     }
 
+    void show_usage(const bool served) {
+        const std::lock_guard lock{mutex_};
+        if (server_) throw std::logic_error("REST usage cannot be changed after the server starts");
+        usage_served_ = served;
+    }
+
+    json usage() const { return usage_->report(); }
+
+    std::string usage_metrics() const {
+        std::string title, version;
+        {
+            const std::lock_guard lock{mutex_};
+            title = title_.empty() ? "API" : title_;
+            version = version_;
+        }
+        return usage_->metrics(title, version);
+    }
+
+    void reset_usage() { usage_->reset(); }
+
     void api_info(std::string title, std::string version, std::string description) {
         const std::lock_guard lock{mutex_};
         title_ = std::move(title);
@@ -457,6 +665,10 @@ public:
             if (server_) throw std::logic_error("REST server is already running");
 
             try {
+                if (usage_served_ && !usage_added_) {
+                    add_usage();
+                    usage_added_ = true;
+                }
                 if (documented_ && !documentation_added_) {
                     add_documentation();
                     documentation_added_ = true;
@@ -464,7 +676,8 @@ public:
                 auto router = oatpp::web::server::HttpRouter::createShared();
                 for (const auto &route : routes_) {
                     router->route(route.method.c_str(), route.path.c_str(),
-                                  std::make_shared<route_handler>(route.handler, route.jwt));
+                                  std::make_shared<route_handler>(route.handler, route.jwt, usage_,
+                                                                  route.path == "/*" ? std::string{"unmatched"} : route.path));
                 }
 
                 // Creating the provider binds and listens, so connections are accepted from here on.
@@ -516,6 +729,21 @@ private:
         std::shared_ptr<const jwt_service> jwt;
         std::string description;
     };
+
+    // GET /usage: the usage figures for Prometheus, or as JSON with ?format=json; unless the
+    // program has a /usage of its own.
+    void add_usage() {
+        if (std::ranges::any_of(routes_, [](const route &each) { return each.method == "GET" && each.path == "/usage"; })) return;
+        routes_.push_back({"GET", "/usage", [this](const rest_request &request) {
+                               if (request.query.value("format", std::string{}) == "json") {
+                                   return rest_response{200, usage().dump(2), content_type::json};
+                               }
+                               return rest_response{200, usage_metrics(), rest_content_type{"text/plain; version=0.0.4; charset=utf-8"}};
+                           },
+                           nullptr,
+                           "Usage since the start: requests by route and status, their times, bytes and clients, for "
+                           "Prometheus; ?format=json for JSON"});
+    }
 
     // The documentation's routes (/, /openapi.json, /docs), for the routes as they are at
     // run(): each one a program hasn't registered itself.
@@ -623,7 +851,10 @@ private:
     enum class run_state { idle, running, ended };
 
     ip_endpoint endpoint_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
+    std::shared_ptr<usage_stats> usage_ = std::make_shared<usage_stats>();
+    bool usage_served_ = true;
+    bool usage_added_ = false;
     std::condition_variable state_changed_;
     run_state state_ = run_state::idle;
     std::vector<route> routes_;
@@ -673,6 +904,22 @@ void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::s
 
 void sc::rest_server::documentation(const bool served) {
     implementation_->documentation(served);
+}
+
+void sc::rest_server::show_usage(const bool served) {
+    implementation_->show_usage(served);
+}
+
+nlohmann::json sc::rest_server::usage() const {
+    return implementation_->usage();
+}
+
+std::string sc::rest_server::usage_metrics() const {
+    return implementation_->usage_metrics();
+}
+
+void sc::rest_server::reset_usage() {
+    implementation_->reset_usage();
 }
 
 void sc::rest_server::api_info(std::string title, std::string version, std::string description) {
