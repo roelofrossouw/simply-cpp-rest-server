@@ -514,8 +514,9 @@ namespace {
         // route is what the usage figures call it: the registered path, "unmatched" for the
         // documentation's catch-all.
         route_handler(sc::rest_handler handler, std::shared_ptr<const jwt_service> jwt, std::shared_ptr<usage_stats> usage,
-                      std::string route)
-            : handler_(std::move(handler)), jwt_(std::move(jwt)), usage_(std::move(usage)), route_(std::move(route)) {
+                      std::string route, std::shared_ptr<const std::vector<std::string>> proxies)
+            : handler_(std::move(handler)), jwt_(std::move(jwt)), usage_(std::move(usage)), route_(std::move(route)),
+              proxies_(std::move(proxies)) {
         }
 
         std::shared_ptr<OutgoingResponse> handle(const std::shared_ptr<IncomingRequest> &request) override {
@@ -527,8 +528,9 @@ namespace {
             std::size_t bytes = 0;
             std::shared_ptr<OutgoingResponse> outgoing;
             try {
-                client = remote_address(*request);
-                const auto response = answer(*request, client);
+                const auto peer = remote_address(*request);
+                client = forwarded_client(*request, peer);
+                const auto response = answer(*request, client, peer);
                 outgoing = make_response(response);
                 status = response.status;
                 bytes = response.body.size();
@@ -542,7 +544,34 @@ namespace {
         }
 
     private:
-        sc::rest_response answer(IncomingRequest &request, const std::string &client) const {
+        // The client behind a trusted proxy: X-Forwarded-For lists the addresses a request came
+        // through, the client first, each proxy adding the one it got it from; the nearest that
+        // isn't a trusted proxy is the client. From anyone else, the connection's address.
+        std::string forwarded_client(IncomingRequest &request, const std::string &peer) const {
+            const auto trusted = [this](const std::string &address) {
+                return std::ranges::find(*proxies_, address) != proxies_->end();
+            };
+            if (!trusted(peer)) return peer;
+            const auto header = oat_string(request.getHeader("X-Forwarded-For"));
+            std::string client = peer;
+            std::size_t end = header.size();
+            while (end > 0) {
+                const auto comma = header.rfind(',', end - 1);
+                const auto start = comma == std::string::npos ? 0 : comma + 1;
+                auto address = header.substr(start, end - start);
+                address.erase(0, address.find_first_not_of(" \t"));
+                address.erase(address.find_last_not_of(" \t") + 1);
+                if (!address.empty()) {
+                    client = address;
+                    if (!trusted(address)) break;
+                }
+                if (comma == std::string::npos) break;
+                end = comma;
+            }
+            return client;
+        }
+
+        sc::rest_response answer(IncomingRequest &request, const std::string &client, const std::string &peer) const {
             oatpp::String body;
             if (request.getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH)) {
                 body = request.readBodyToString();
@@ -556,6 +585,7 @@ namespace {
                 oat_string(request.getHeader(oatpp::web::protocol::http::Header::AUTHORIZATION)),
                 client,
             };
+            rest_request.peer_address = peer;
             if (question != std::string::npos) {
                 rest_request.query_string = target.substr(question + 1);
                 rest_request.query = parse_query(rest_request.query_string);
@@ -599,6 +629,7 @@ namespace {
         std::shared_ptr<const jwt_service> jwt_;
         std::shared_ptr<usage_stats> usage_;
         std::string route_;
+        std::shared_ptr<const std::vector<std::string>> proxies_;
     };
 }
 
@@ -645,6 +676,12 @@ public:
         if (found == routes_.end()) throw std::invalid_argument("No REST route " + method + " " + path + " to deprecate");
         found->deprecated = true;
         found->replacement = std::move(replacement);
+    }
+
+    void trusted_proxies(std::vector<std::string> addresses) {
+        const std::lock_guard lock{mutex_};
+        if (server_) throw std::logic_error("REST trusted proxies cannot be changed after the server starts");
+        proxies_ = std::move(addresses);
     }
 
     void show_usage(const bool served) {
@@ -704,10 +741,12 @@ public:
                     documentation_added_ = true;
                 }
                 auto router = oatpp::web::server::HttpRouter::createShared();
+                const auto proxies = std::make_shared<const std::vector<std::string>>(proxies_);
                 for (const auto &route : routes_) {
                     router->route(route.method.c_str(), route.path.c_str(),
                                   std::make_shared<route_handler>(route.handler, route.jwt, usage_,
-                                                                  route.path == "/*" ? std::string{"unmatched"} : route.path));
+                                                                  route.path == "/*" ? std::string{"unmatched"} : route.path,
+                                                                  proxies));
                 }
 
                 // Creating the provider binds and listens, so connections are accepted from here on.
@@ -922,6 +961,7 @@ private:
     mutable std::mutex mutex_;
     std::shared_ptr<usage_stats> usage_ = std::make_shared<usage_stats>();
     bool usage_served_ = true;
+    std::vector<std::string> proxies_{"127.0.0.1", "::1"}; // trusted_proxies()
     bool usage_added_ = false;
     std::condition_variable state_changed_;
     run_state state_ = run_state::idle;
@@ -1009,6 +1049,10 @@ void sc::rest_server::log_level(const sc::log_level level) {
 
 void sc::rest_server::deprecated(const std::string &method, const std::string &path, std::string replacement) {
     implementation_->deprecate(method, path, std::move(replacement));
+}
+
+void sc::rest_server::trusted_proxies(std::vector<std::string> addresses) {
+    implementation_->trusted_proxies(std::move(addresses));
 }
 
 void sc::rest_server::show_usage(const bool served) {
