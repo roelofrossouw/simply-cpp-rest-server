@@ -146,12 +146,15 @@ namespace {
 
     // Every route, and the JWT bearer authentication, on the server (before it runs).
     void register_routes(sc::rest_server &server) {
-        server.get("/hello", hello);
-        server.post("/echo", echo);
+        // A description each, for the documentation the server makes of its routes (GET /,
+        // /openapi.json, /docs).
+        server.api_info("sc-rest-server demo", "1", "A server and its client in one program");
+        server.get("/hello", hello, "A greeting, as plain text");
+        server.post("/echo", echo, "The request back as JSON: its query and its JSON body");
 
         // JWT adds POST /create_token and /refresh_token; bearer_ routes then need a token.
         server.configure_jwt({.secret = random_secret(), .validate_credentials = login});
-        server.bearer_get("/account", account);
+        server.bearer_get("/account", account, "Who the token is for");
     }
 
     // Serves until stop(). run() blocks, so this runs on a thread of its own.
@@ -178,6 +181,10 @@ int main() {
         std::thread server_thread{serve, std::ref(server)};
         const server_thread_guard guard{server, server_thread};
         if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
+
+        sc::console::heading("What the server has: its routes, made from them");
+        sc::rest routes{base_url + "/"};
+        sc::console::show_text("GET /", routes.get());
 
         sc::console::heading("Plain text");
         sc::rest hello{base_url + "/hello"};
@@ -206,6 +213,41 @@ int main() {
         sc::console::show_text("GET /account  (Authorization: Bearer <access_token>)", account.get());
 ```
 <!-- /sc-example -->
+
+## Documentation of the API
+
+The server documents its own routes, from what was registered, at three routes of its own:
+
+| Route | |
+|---|---|
+| `GET /` | A plain list: each route's method, path, description and whether it needs a bearer token. `curl -s http://host:port` shows it. |
+| `GET /openapi.json` | The same as an OpenAPI 3.0 document (bearer routes marked, `/create_token`'s body described), for Swagger UI, Postman and the like. |
+| `GET /docs` | Swagger UI on that document (the page loads Swagger UI from a CDN, so the browser needs internet). |
+
+Any other path answers **404** with the same list, so a mistyped path shows the right ones.
+Give each route a description, and the API a title, version and description:
+
+```cpp
+server.api_info("OneAPI", ONEAPI_VERSION, "Logins and tracking");
+server.get("/hello", hello, "A greeting, as plain text");
+server.bearer_get("/account", account, "Who the token is for");
+```
+
+```text
+OneAPI 1.0.26
+Logins and tracking
+
+GET  /               This list of the API's routes
+GET  /account        Who the token is for (needs a bearer token)
+POST /create_token   A login: an access token (and a refresh token) for the routes that need one
+GET  /docs           Swagger UI on /openapi.json
+GET  /hello          A greeting, as plain text
+...
+```
+
+A route of the program's own at `/`, `/openapi.json` or `/docs` is kept instead of the
+documentation's; `server.documentation(false)` (before `run()`) leaves all of it out, the 404s
+then plain.
 
 ## JWT bearer authentication
 

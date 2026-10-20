@@ -406,21 +406,34 @@ public:
         routes_.push_back({"POST", "/create_token", [jwt = jwt_](const rest_request &request) {
                                return jwt->create_token(request);
                            },
-                           nullptr});
+                           nullptr, "A login: an access token (and a refresh token) for the routes that need one"});
         routes_.push_back({"POST", "/refresh_token", [jwt = jwt_](const rest_request &request) {
                                return jwt->refresh_token(request);
                            },
-                           nullptr});
+                           nullptr, "A new access token for a refresh token"});
     }
 
-    void add_route(std::string method, std::string path, rest_handler handler, const bool bearer_required) {
+    void documentation(const bool served) {
+        const std::lock_guard lock{mutex_};
+        if (server_) throw std::logic_error("REST documentation cannot be changed after the server starts");
+        documented_ = served;
+    }
+
+    void api_info(std::string title, std::string version, std::string description) {
+        const std::lock_guard lock{mutex_};
+        title_ = std::move(title);
+        version_ = std::move(version);
+        description_ = std::move(description);
+    }
+
+    void add_route(std::string method, std::string path, rest_handler handler, const bool bearer_required, std::string description = {}) {
         if (path.empty() || path.front() != '/') throw std::invalid_argument("REST route path must start with '/'");
         if (!handler) throw std::invalid_argument("REST route handler must not be empty");
 
         const std::lock_guard lock{mutex_};
         if (server_) throw std::logic_error("REST routes cannot be added after the server starts");
         if (bearer_required && !jwt_) throw std::logic_error("JWT must be configured before adding bearer routes");
-        routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? jwt_ : nullptr});
+        routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? jwt_ : nullptr, std::move(description)});
     }
 
     void run() {
@@ -430,6 +443,10 @@ public:
             if (server_) throw std::logic_error("REST server is already running");
 
             try {
+                if (documented_ && !documentation_added_) {
+                    add_documentation();
+                    documentation_added_ = true;
+                }
                 auto router = oatpp::web::server::HttpRouter::createShared();
                 for (const auto &route : routes_) {
                     router->route(route.method.c_str(), route.path.c_str(),
@@ -483,7 +500,105 @@ private:
         std::string path;
         rest_handler handler;
         std::shared_ptr<const jwt_service> jwt;
+        std::string description;
     };
+
+    // The documentation's routes (/, /openapi.json, /docs), for the routes as they are at
+    // run(): each one a program hasn't registered itself.
+    void add_documentation() {
+        const auto taken = [this](const std::string &method, const std::string &path) {
+            return std::ranges::any_of(routes_, [&](const route &each) { return each.method == method && each.path == path; });
+        };
+        struct entry {
+            std::string method, path, description;
+            bool bearer;
+        };
+        std::vector<entry> listed;
+        for (const auto &each: routes_) listed.push_back({each.method, each.path, each.description, each.jwt != nullptr});
+        const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
+                                     {"GET", "/openapi.json", "The API as an OpenAPI 3.0 document", false},
+                                     {"GET", "/docs", "Swagger UI on /openapi.json", false}};
+        for (const auto &each: own)
+            if (!taken(each.method, each.path)) listed.push_back(each);
+        std::ranges::stable_sort(listed, [](const entry &a, const entry &b) { return a.path != b.path ? a.path < b.path : a.method < b.method; });
+
+        // GET /: one line a route, "GET  /status   the figures (needs a bearer token)".
+        std::size_t width = 0;
+        for (const auto &each: listed) width = std::max(width, each.path.size());
+        std::string help = (title_.empty() ? std::string{"API"} : title_) + (version_.empty() ? "" : " " + version_) + "\n";
+        if (!description_.empty()) help += description_ + "\n";
+        help += "\n";
+        for (const auto &each: listed) {
+            std::string line = each.method + std::string(each.method.size() < 5 ? 5 - each.method.size() : 1, ' ') + each.path;
+            line += std::string(width + 2 - each.path.size(), ' ') + each.description;
+            if (each.bearer) line += each.description.empty() ? "(needs a bearer token)" : " (needs a bearer token)";
+            help += line + "\n";
+        }
+        if (jwt_) help += "\nA token comes from POST /create_token; send it as \"Authorization: Bearer <token>\".\n";
+
+        // GET /openapi.json
+        json paths = json::object();
+        for (const auto &each: listed) {
+            std::string method = each.method;
+            std::ranges::transform(method, method.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
+            if (!each.description.empty()) operation["summary"] = each.description;
+            if (each.bearer) {
+                operation["security"] = json::array({{{"bearer", json::array()}}});
+                operation["responses"]["401"] = {{"description", "No token, or one that isn't valid"}};
+            }
+            if (each.path == "/create_token" || each.path == "/refresh_token") {
+                const bool login = each.path == "/create_token";
+                json properties = json::object();
+                if (login) {
+                    properties["username"] = {{"type", "string"}};
+                    properties["password"] = {{"type", "string"}};
+                } else {
+                    properties["refresh_token"] = {{"type", "string"}};
+                }
+                json schema = {{"type", "object"}, {"properties", properties}};
+                operation["requestBody"]["required"] = true;
+                operation["requestBody"]["content"]["application/json"]["schema"] = schema;
+                operation["responses"]["401"] = {{"description", login ? "The login was refused" : "The refresh token isn't valid"}};
+            } else if (each.method == "POST") {
+                operation["requestBody"]["required"] = false;
+                operation["requestBody"]["content"]["application/json"]["schema"] = {{"type", "object"}};
+            }
+            paths[each.path][method] = operation;
+        }
+        json document{{"openapi", "3.0.3"},
+                      {"info", {{"title", title_.empty() ? std::string{"API"} : title_}, {"version", version_.empty() ? std::string{"1"} : version_}}},
+                      {"paths", paths}};
+        if (!description_.empty()) document["info"]["description"] = description_;
+        if (jwt_) document["components"] = {{"securitySchemes", {{"bearer", {{"type", "http"}, {"scheme", "bearer"}, {"bearerFormat", "JWT"}}}}}};
+
+        // GET /docs: Swagger UI, from a CDN (pinned), on the document above.
+        const std::string page = R"(<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>)" + (title_.empty() ? std::string{"API"} : title_) + R"(</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"></head>
+<body><div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+<script>window.onload = () => SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui"});</script>
+</body></html>
+)";
+        const auto serve = [this, &taken](const std::string &path, std::string body, std::string type) {
+            if (taken("GET", path)) return;
+            routes_.push_back({"GET", path, [body = std::move(body), type = std::move(type)](const rest_request &) {
+                                   return rest_response{200, body, rest_content_type{type}};
+                               },
+                               nullptr, ""});
+        };
+        serve("/", help, "text/plain; charset=utf-8");
+        serve("/openapi.json", document.dump(2), "application/json");
+        serve("/docs", page, "text/html; charset=utf-8");
+        // Any other path: 404, with the list, so a wrong path shows the right ones. Last, so the
+        // routes above win.
+        for (const char *method: {"GET", "POST"})
+            routes_.push_back({method, "/*", [help](const rest_request &) {
+                                   return rest_response{404, help, rest_content_type{"text/plain; charset=utf-8"}};
+                               },
+                               nullptr, ""});
+    }
 
     // Whether the latest run() has started serving yet, or has ended (stopped or failed).
     enum class run_state { idle, running, ended };
@@ -494,6 +609,9 @@ private:
     run_state state_ = run_state::idle;
     std::vector<route> routes_;
     std::shared_ptr<const jwt_service> jwt_;
+    bool documented_ = true;
+    bool documentation_added_ = false; // a second run() keeps the first's
+    std::string title_, version_, description_;
     std::shared_ptr<oatpp::network::Server> server_;
 };
 
@@ -516,6 +634,30 @@ void sc::rest_server::bearer_get(std::string path, rest_handler handler) {
 
 void sc::rest_server::bearer_post(std::string path, rest_handler handler) {
     implementation_->add_route("POST", std::move(path), std::move(handler), true);
+}
+
+void sc::rest_server::get(std::string path, rest_handler handler, std::string description) {
+    implementation_->add_route("GET", std::move(path), std::move(handler), false, std::move(description));
+}
+
+void sc::rest_server::post(std::string path, rest_handler handler, std::string description) {
+    implementation_->add_route("POST", std::move(path), std::move(handler), false, std::move(description));
+}
+
+void sc::rest_server::bearer_get(std::string path, rest_handler handler, std::string description) {
+    implementation_->add_route("GET", std::move(path), std::move(handler), true, std::move(description));
+}
+
+void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::string description) {
+    implementation_->add_route("POST", std::move(path), std::move(handler), true, std::move(description));
+}
+
+void sc::rest_server::documentation(const bool served) {
+    implementation_->documentation(served);
+}
+
+void sc::rest_server::api_info(std::string title, std::string version, std::string description) {
+    implementation_->api_info(std::move(title), std::move(version), std::move(description));
 }
 
 void sc::rest_server::configure_jwt(jwt_configuration configuration) {

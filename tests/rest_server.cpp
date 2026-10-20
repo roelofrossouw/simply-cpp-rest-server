@@ -107,9 +107,10 @@ int main() {
             return username == "test" && password == "test" ? std::string{"user-42"} : std::string{};
         },
     });
+    server.api_info("Test API", "1.2.3", "For the tests");
     server.get("/health", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.method + " ready"};
-    });
+    }, "Whether it's up");
     server.bearer_get("/protected", [](const sc::rest_request &request) {
         return sc::rest_response{200, "protected for " + request.claims.at("sub").get<std::string>() + " (" +
                                       request.claims.at("type").get<std::string>() + ") from " +
@@ -261,11 +262,63 @@ int main() {
                                              "Bearer " + refreshed_tokens.at("access_token").get<std::string>());
     CHECK(refreshed_protected.ends_with("protected for user-42 (access) from 127.0.0.1"));
 
+    SECTION("The documentation: the list at /, OpenAPI, Swagger UI");
+    {
+        const auto list = request(port, "GET", "/");
+        CHECK(list.starts_with("HTTP/1.1 200"));
+        const auto text = list.substr(list.find("\r\n\r\n") + 4);
+        CHECK(text.starts_with("Test API 1.2.3\nFor the tests\n"));
+        CHECK(text.find("GET  /health") != std::string::npos);
+        CHECK(text.find("Whether it's up") != std::string::npos);
+        CHECK(text.find("GET  /protected") != std::string::npos);
+        CHECK(text.find("(needs a bearer token)") != std::string::npos);
+        CHECK(text.find("POST /create_token") != std::string::npos);
+        CHECK(text.find("GET  /openapi.json") != std::string::npos);
+
+        const auto document = response_body(request(port, "GET", "/openapi.json"));
+        CHECK_EQ(document["openapi"].get<std::string>(), std::string{"3.0.3"});
+        CHECK_EQ(document["info"]["title"].get<std::string>(), std::string{"Test API"});
+        CHECK_EQ(document["paths"]["/health"]["get"]["summary"].get<std::string>(), std::string{"Whether it's up"});
+        CHECK(document["paths"]["/protected"]["get"].contains("security"));
+        CHECK(!document["paths"]["/health"]["get"].contains("security"));
+        CHECK(document["paths"]["/create_token"]["post"]["requestBody"]["content"]["application/json"]["schema"]["properties"].contains("password"));
+        CHECK_EQ(document["components"]["securitySchemes"]["bearer"]["scheme"].get<std::string>(), std::string{"bearer"});
+
+        const auto page = request(port, "GET", "/docs");
+        CHECK(page.starts_with("HTTP/1.1 200"));
+        CHECK(page.find("SwaggerUIBundle") != std::string::npos);
+        CHECK(page.find("openapi.json") != std::string::npos);
+    }
+
+    SECTION("A path that isn't there: 404, with the list");
+    {
+        const auto missing = request(port, "GET", "/no/such/route");
+        CHECK(missing.starts_with("HTTP/1.1 404"));
+        CHECK(missing.find("GET  /health") != std::string::npos);
+        CHECK(request(port, "POST", "/nothing", "{}").starts_with("HTTP/1.1 404"));
+        CHECK(request(port, "GET", "/health").starts_with("HTTP/1.1 200")); // the real routes still win
+    }
+
     server.stop();
     server_thread.join();
 
     SECTION("Not running after stop()");
     CHECK(!server.wait_until_running(std::chrono::milliseconds{0}));
+
+    SECTION("Without documentation: no list, no catch-all");
+    {
+        const int other_port = available_port();
+        sc::rest_server plain{{"127.0.0.1", other_port}};
+        plain.documentation(false);
+        plain.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; });
+        std::thread serving{[&plain] { plain.run(); }};
+        CHECK(plain.wait_until_running());
+        CHECK(request(other_port, "GET", "/").starts_with("HTTP/1.1 404"));
+        CHECK(request(other_port, "GET", "/openapi.json").starts_with("HTTP/1.1 404"));
+        CHECK(request(other_port, "GET", "/health").ends_with("up"));
+        plain.stop();
+        serving.join();
+    }
 
     SECTION("wait_until_running() reports a server that cannot bind at once");
     {
