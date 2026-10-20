@@ -774,8 +774,8 @@ private:
                                return rest_response{200, usage_metrics(), rest_content_type{"text/plain; version=0.0.4; charset=utf-8"}};
                            },
                            nullptr,
-                           "Usage since the start: requests by route and status, their times, bytes and clients, for "
-                           "Prometheus; ?format=json for JSON"});
+                           "How the API has been used since it started: requests by route and answer, how long they "
+                           "took, and who asked; ?format=json for a readable form"});
     }
 
     // The documentation's routes (/, /openapi.json, /docs), for the routes as they are at
@@ -795,8 +795,8 @@ private:
         for (const auto &each: routes_)
             listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters, each.deprecated, each.replacement});
         const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
-                                     {"GET", "/openapi.json", "The API as an OpenAPI 3.0 document", false},
-                                     {"GET", "/docs", "Swagger UI on /openapi.json", false}};
+                                     {"GET", "/openapi.json", "The API's description, for tools that read it", false},
+                                     {"GET", "/docs", "These routes in a browser, to read and try", false}};
         for (const auto &each: own)
             if (!taken(each.method, each.path)) listed.push_back(each);
         std::ranges::stable_sort(listed, [](const entry &a, const entry &b) { return a.path != b.path ? a.path < b.path : a.method < b.method; });
