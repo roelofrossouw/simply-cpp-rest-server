@@ -128,6 +128,18 @@ namespace sc {
         // Any other path answers 404 with that list. A route of the program's own at one of those
         // paths is kept instead. Before run().
         void documentation(bool served);
+        // Usage figures (since 1.3.0), kept from the start: requests by method, route (the
+        // registered pattern, "unmatched" for a path no route has) and status; how long they
+        // took (a histogram) and the bytes they sent; requests and errors by client address (the
+        // first 1000 addresses, the rest as "other"); requests in flight. Served at GET /usage in
+        // Prometheus' text format (sc_rest_requests_total, sc_rest_request_duration_seconds, ...),
+        // or as JSON with ?format=json, unless show_usage(false) (before run()) or the program has
+        // a /usage of its own; they are kept either way, for usage() and usage_metrics().
+        void show_usage(bool served);
+        [[nodiscard]] nlohmann::json usage() const;
+        [[nodiscard]] std::string usage_metrics() const;
+        // The figures back to zero, the clients forgotten.
+        void reset_usage();
         // The title, version and description the documentation gives the API.
         void api_info(std::string title, std::string version = {}, std::string description = {});
 
