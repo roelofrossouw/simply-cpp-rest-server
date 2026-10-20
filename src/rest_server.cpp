@@ -29,12 +29,12 @@ namespace {
     using json = nlohmann::json;
     using unix_seconds = std::int64_t;
 
-    // %XX decoded, and + as a space, as in a query string.
-    std::string url_decode(const std::string_view text) {
+    // %XX decoded, and + as a space, as in a query string (a path keeps its +).
+    std::string url_decode(const std::string_view text, const bool plus_is_space = true) {
         std::string result;
         result.reserve(text.size());
         for (std::size_t i = 0; i < text.size(); ++i) {
-            if (text[i] == '+') {
+            if (text[i] == '+' && plus_is_space) {
                 result += ' ';
             } else if (text[i] == '%' && i + 2 < text.size() && std::isxdigit(static_cast<unsigned char>(text[i + 1])) &&
                        std::isxdigit(static_cast<unsigned char>(text[i + 2]))) {
@@ -45,6 +45,17 @@ namespace {
             }
         }
         return result;
+    }
+
+    // The {name} segments of a route's path: {"device"} for "/vms/locus/{device}".
+    std::vector<std::string> path_parameters(const std::string_view path) {
+        std::vector<std::string> names;
+        for (std::size_t open = path.find('{'); open != std::string_view::npos; open = path.find('{', open + 1)) {
+            const auto close = path.find('}', open);
+            if (close == std::string_view::npos) break;
+            names.emplace_back(path.substr(open + 1, close - open - 1));
+        }
+        return names;
     }
 
     // "a=1&b=x%20y&c&d=1&d=2&e[]=3" as {"a": "1", "b": "x y", "c": "", "d": ["1", "2"], "e": ["3"]}.
@@ -343,6 +354,9 @@ namespace {
             }
             rest_request.content_type = oat_string(request->getHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE));
             rest_request.json = parse_body(rest_request.body, rest_request.content_type);
+            for (const auto &[name, value]: request->getPathVariables().getVariables()) {
+                rest_request.parameters[name.std_str()] = url_decode(value.std_str(), false);
+            }
 
             try {
                 if (jwt_) {
@@ -544,6 +558,9 @@ private:
             std::ranges::transform(method, method.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
             if (!each.description.empty()) operation["summary"] = each.description;
+            for (const auto &name: path_parameters(each.path)) {
+                operation["parameters"].push_back({{"name", name}, {"in", "path"}, {"required", true}, {"schema", {{"type", "string"}}}});
+            }
             if (each.bearer) {
                 operation["security"] = json::array({{{"bearer", json::array()}}});
                 operation["responses"]["401"] = {{"description", "No token, or one that isn't valid"}};
