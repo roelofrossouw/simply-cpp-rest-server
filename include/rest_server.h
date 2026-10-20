@@ -19,7 +19,8 @@ namespace sc {
         std::string path;
         std::string body;
         std::string authorization;
-        // The client's IP address.
+        // The client's IP address: behind a trusted proxy (see rest_server::trusted_proxies()), the one
+        // the proxy says in X-Forwarded-For; otherwise the connection's.
         std::string remote_address;
         // For bearer_get()/bearer_post() routes, the verified access token's payload: "sub" (what
         // jwt_configuration::validate_credentials returned), "source" (the IP address the token was
@@ -41,6 +42,8 @@ namespace sc {
         // GET /vms/locus/100000002623 on the route "/vms/locus/{device}" (since 1.3.0). Empty
         // for a route without them.
         nlohmann::json parameters = nlohmann::json::object();
+        // The connection's own IP address: the proxy's, when there is one (since 1.5.0).
+        std::string peer_address;
     };
 
     // What a documented parameter holds, for the OpenAPI document.
@@ -151,6 +154,14 @@ namespace sc {
         // (sc::log_level::warning); info adds its info messages, debug its debug ones. For every
         // server in the process; may be called before or while one runs.
         static void log_level(sc::log_level level);
+
+        // The proxies whose X-Forwarded-For is believed (since 1.5.0), by IP address: a request from
+        // one of them has its remote_address (and the usage figures, and a token's source) taken
+        // from the header, the nearest address in it that isn't a trusted proxy itself. By default
+        // the local machine's, 127.0.0.1 and ::1, as with a proxy (Apache, nginx) on the same
+        // server for TLS; {} believes none. A request from anywhere else keeps its own address,
+        // so a client can't claim another. Before run().
+        void trusted_proxies(std::vector<std::string> addresses);
 
         // Marks a route added before as deprecated in the documentation (since 1.4.0): Swagger UI
         // shows it struck through, and the list at / says what to use instead ("GET /gps/{device}").

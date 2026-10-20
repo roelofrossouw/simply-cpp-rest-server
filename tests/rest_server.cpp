@@ -38,9 +38,10 @@ namespace {
         return ntohs(address.sin_port);
     }
 
-    // content_type is sent with a body; "" sends none.
+    // content_type is sent with a body; "" sends none. headers: more lines, each ending in \r\n.
     std::string request(const int port, const std::string &method, const std::string &path, const std::string &body = {},
-                        const std::string &authorization = {}, const std::string &content_type = "application/json") {
+                        const std::string &authorization = {}, const std::string &content_type = "application/json",
+                        const std::string &headers = {}) {
         for (int attempt = 0; attempt < 100; ++attempt) {
             const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
             if (socket_fd < 0) throw std::runtime_error("Unable to create test socket");
@@ -56,6 +57,7 @@ namespace {
             if (connect(socket_fd, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) == 0) {
                 std::string http_request = method + ' ' + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
                 if (!authorization.empty()) http_request += "Authorization: " + authorization + "\r\n";
+                http_request += headers;
                 if (!body.empty()) {
                     if (!content_type.empty()) http_request += "Content-Type: " + content_type + "\r\n";
                     http_request += "Content-Length: " + std::to_string(body.size()) + "\r\n";
@@ -127,6 +129,9 @@ int main() {
     });
     server.get("/address", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.remote_address};
+    });
+    server.get("/peer", [](const sc::rest_request &request) {
+        return sc::rest_response{200, request.peer_address};
     });
     // Everything a handler is told about the request, back as JSON.
     const auto inspect = [](const sc::rest_request &request) {
@@ -270,6 +275,23 @@ int main() {
     SECTION("Requests carry the client's address");
     CHECK(request(port, "GET", "/address").ends_with("\r\n\r\n127.0.0.1"));
 
+    SECTION("Behind a trusted proxy (loopback by default): the client from X-Forwarded-For");
+    {
+        const auto through = [&](const std::string &forwarded) {
+            const auto answer = request(port, "GET", "/address", {}, {}, "application/json", "X-Forwarded-For: " + forwarded + "\r\n");
+            return answer.substr(answer.find("\r\n\r\n") + 4);
+        };
+        CHECK_EQ(through("203.0.113.7"), std::string{"203.0.113.7"});
+        CHECK_EQ(through("198.51.100.1, 203.0.113.7"), std::string{"203.0.113.7"}); // the nearest: what the proxy saw
+        CHECK_EQ(through("203.0.113.7, 127.0.0.1"), std::string{"203.0.113.7"});    // a trusted proxy in between
+        CHECK_EQ(through(" "), std::string{"127.0.0.1"});                           // nothing in it
+        const auto peer = request(port, "GET", "/peer", {}, {}, "application/json", "X-Forwarded-For: 203.0.113.7\r\n");
+        CHECK(peer.ends_with("\r\n\r\n127.0.0.1")); // the connection's own
+        server.reset_usage();
+        (void) through("203.0.113.9");
+        CHECK(server.usage_metrics().find("sc_rest_client_requests_total{client=\"203.0.113.9\"} 1") != std::string::npos);
+    }
+
     SECTION("Unprotected routes have no claims");
     CHECK(request(port, "GET", "/claims").ends_with("none"));
     CHECK(request(port, "GET", "/claims", {}, "Bearer " + tokens.at("access_token").get<std::string>()).ends_with("none"));
@@ -403,7 +425,9 @@ int main() {
         sc::rest_server plain{{"127.0.0.1", other_port}};
         plain.documentation(false);
         plain.show_usage(false);
+        plain.trusted_proxies({}); // no proxies believed
         plain.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; });
+        plain.get("/address", [](const sc::rest_request &request) { return sc::rest_response{200, request.remote_address}; });
         CHECK_THROWS_AS(plain.deprecated("GET", "/nothing"), std::invalid_argument); // no such route
         CHECK_THROWS_AS(plain.deprecated("POST", "/health"), std::invalid_argument); // by method too
         std::thread serving{[&plain] { plain.run(); }};
@@ -411,6 +435,7 @@ int main() {
         CHECK(request(other_port, "GET", "/").starts_with("HTTP/1.1 404"));
         CHECK(request(other_port, "GET", "/openapi.json").starts_with("HTTP/1.1 404"));
         CHECK(request(other_port, "GET", "/health").ends_with("up"));
+        CHECK(request(other_port, "GET", "/address", {}, {}, "application/json", "X-Forwarded-For: 203.0.113.7\r\n").ends_with("127.0.0.1"));
         CHECK(request(other_port, "GET", "/usage").starts_with("HTTP/1.1 404")); // not served, still kept:
         CHECK(plain.usage_metrics().find("route=\"/health\",status=\"200\"} 1") != std::string::npos);
         CHECK_THROWS_AS(plain.show_usage(true), std::logic_error); // not while running

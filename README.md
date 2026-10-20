@@ -312,6 +312,25 @@ answered, so a request to `/usage` shows in the next one. Without the
 documentation (`documentation(false)`) there is no catch-all, so paths no route
 has get oatpp's plain 404 and aren't counted.
 
+## Behind a proxy
+
+A proxy in front of the server (Apache or nginx for TLS, say) makes every
+request come from its address. Since 1.5.0 the server believes the
+`X-Forwarded-For` header of the proxies it trusts, by default the local
+machine's (`127.0.0.1`, `::1`): `request.remote_address`, the usage figures'
+clients and a token's `source` are then the client the proxy served, the nearest
+address in the header that isn't a trusted proxy itself; `request.peer_address`
+keeps the connection's own. A request from anywhere else keeps its own address,
+so a client can't claim another by sending the header.
+
+```cpp
+server.trusted_proxies({"127.0.0.1", "10.0.100.5"}); // a proxy on another server too
+server.trusted_proxies({});                          // believe none
+```
+
+Apache's `ProxyPass` sends the header by default; nginx needs
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
+
 ## Logging
 
 oatpp, underneath, writes its errors and warnings to stderr; since 1.3.2 not its
