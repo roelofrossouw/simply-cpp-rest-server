@@ -234,7 +234,7 @@ The server documents its own routes, from what was registered, at three routes o
 |---|---|
 | `GET /` | A plain list: each route's method, path, description and whether it needs a bearer token. `curl -s http://host:port` shows it. |
 | `GET /openapi.json` | The same as an OpenAPI 3.0 document (bearer routes marked, `/create_token`'s body described), for Swagger UI, Postman and the like. |
-| `GET /docs` | Swagger UI on that document: open `http://host:port/docs` in a browser (the page loads Swagger UI from a CDN, so the browser needs internet). Also at `GET /swagger`. |
+| `GET /docs` | Swagger UI on that document: open `http://host:port/docs` in a browser (the page loads Swagger UI from a CDN, so the browser needs internet). |
 
 Any other path answers **404** with the same list, so a mistyped path shows the right ones.
 Give each route a description, and the API a title, version and description:

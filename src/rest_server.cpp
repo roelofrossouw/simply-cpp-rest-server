@@ -759,8 +759,7 @@ private:
         for (const auto &each: routes_) listed.push_back({each.method, each.path, each.description, each.jwt != nullptr});
         const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
                                      {"GET", "/openapi.json", "The API as an OpenAPI 3.0 document", false},
-                                     {"GET", "/docs", "Swagger UI on /openapi.json", false},
-                                     {"GET", "/swagger", "The same as /docs", false}};
+                                     {"GET", "/docs", "Swagger UI on /openapi.json", false}};
         for (const auto &each: own)
             if (!taken(each.method, each.path)) listed.push_back(each);
         std::ranges::stable_sort(listed, [](const entry &a, const entry &b) { return a.path != b.path ? a.path < b.path : a.method < b.method; });
@@ -837,7 +836,6 @@ private:
         serve("/", help, "text/plain; charset=utf-8");
         serve("/openapi.json", document.dump(2), "application/json");
         serve("/docs", page, "text/html; charset=utf-8");
-        serve("/swagger", page, "text/html; charset=utf-8");
         // Any other path: 404, with the list, so a wrong path shows the right ones. Last, so the
         // routes above win.
         for (const char *method: {"GET", "POST"})
