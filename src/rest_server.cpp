@@ -638,6 +638,15 @@ public:
         documented_ = served;
     }
 
+    void deprecate(const std::string &method, const std::string &path, std::string replacement) {
+        const std::lock_guard lock{mutex_};
+        if (server_) throw std::logic_error("REST routes cannot be changed after the server starts");
+        const auto found = std::ranges::find_if(routes_, [&](const route &each) { return each.method == method && each.path == path; });
+        if (found == routes_.end()) throw std::invalid_argument("No REST route " + method + " " + path + " to deprecate");
+        found->deprecated = true;
+        found->replacement = std::move(replacement);
+    }
+
     void show_usage(const bool served) {
         const std::lock_guard lock{mutex_};
         if (server_) throw std::logic_error("REST usage cannot be changed after the server starts");
@@ -750,6 +759,8 @@ private:
         std::shared_ptr<const jwt_service> jwt;
         std::string description;
         std::vector<rest_parameter> parameters;
+        bool deprecated = false;
+        std::string replacement;
     };
 
     // GET /usage: the usage figures for Prometheus, or as JSON with ?format=json; unless the
@@ -777,9 +788,12 @@ private:
             std::string method, path, description;
             bool bearer;
             std::vector<rest_parameter> parameters;
+            bool deprecated = false;
+            std::string replacement;
         };
         std::vector<entry> listed;
-        for (const auto &each: routes_) listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters});
+        for (const auto &each: routes_)
+            listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters, each.deprecated, each.replacement});
         const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
                                      {"GET", "/openapi.json", "The API as an OpenAPI 3.0 document", false},
                                      {"GET", "/docs", "Swagger UI on /openapi.json", false}};
@@ -797,6 +811,10 @@ private:
             std::string line = each.method + std::string(each.method.size() < 5 ? 5 - each.method.size() : 1, ' ') + each.path;
             line += std::string(width + 2 - each.path.size(), ' ') + each.description;
             if (each.bearer) line += each.description.empty() ? "(needs a bearer token)" : " (needs a bearer token)";
+            if (each.deprecated) {
+                line += std::string{each.description.empty() && !each.bearer ? "" : " "} + "(deprecated" +
+                        (each.replacement.empty() ? std::string{} : ": use " + each.replacement) + ")";
+            }
             help += line + "\n";
             // Its parameters under it: "  ?limit=  how many (10; at most 1000)"
             const auto in_path = path_parameters(each.path);
@@ -817,6 +835,10 @@ private:
             std::ranges::transform(method, method.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
             json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
             if (!each.description.empty()) operation["summary"] = each.description;
+            if (each.deprecated) {
+                operation["deprecated"] = true;
+                if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + " instead.";
+            }
             const auto in_path = path_parameters(each.path);
             const auto described = [&](const std::string &name) -> const rest_parameter * {
                 const auto found = std::ranges::find(each.parameters, name, &rest_parameter::name);
@@ -983,6 +1005,10 @@ void sc::rest_server::log_level(const sc::log_level level) {
             else logger->disablePriority(priority);
         }
     }
+}
+
+void sc::rest_server::deprecated(const std::string &method, const std::string &path, std::string replacement) {
+    implementation_->deprecate(method, path, std::move(replacement));
 }
 
 void sc::rest_server::show_usage(const bool served) {

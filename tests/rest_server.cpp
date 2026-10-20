@@ -146,6 +146,7 @@ int main() {
         {.name = "key", .description = "the caller's key", .required = true}});
     server.get("/tel/gps/{device}", located);
     server.get("/tel/gps", located);
+    server.deprecated("GET", "/tel/gps", "GET /gps");
     server.get("/claims", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
     });
@@ -326,6 +327,12 @@ int main() {
         CHECK(text.find("?key=  the caller's key (required)") != std::string::npos);
         CHECK(text.find("{lat}  degrees north") != std::string::npos);
         CHECK(!document["paths"]["/tel/gps"]["get"].contains("parameters"));
+        CHECK(document["paths"]["/tel/gps"]["get"]["deprecated"].get<bool>());
+        CHECK_EQ(document["paths"]["/tel/gps"]["get"]["description"].get<std::string>(), std::string{"Deprecated: use GET /gps instead."});
+        CHECK(!document["paths"]["/health"]["get"].contains("deprecated"));
+        CHECK(text.find("GET  /tel/gps                   (deprecated: use GET /gps)") != std::string::npos ||
+              text.find("(deprecated: use GET /gps)") != std::string::npos);
+        CHECK_THROWS_AS(server.deprecated("GET", "/nothing"), std::logic_error); // running: too late either way
 
         const auto page = request(port, "GET", "/docs");
         CHECK(page.starts_with("HTTP/1.1 200"));
@@ -397,6 +404,8 @@ int main() {
         plain.documentation(false);
         plain.show_usage(false);
         plain.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; });
+        CHECK_THROWS_AS(plain.deprecated("GET", "/nothing"), std::invalid_argument); // no such route
+        CHECK_THROWS_AS(plain.deprecated("POST", "/health"), std::invalid_argument); // by method too
         std::thread serving{[&plain] { plain.run(); }};
         CHECK(plain.wait_until_running());
         CHECK(request(other_port, "GET", "/").starts_with("HTTP/1.1 404"));

@@ -274,6 +274,16 @@ The list at `/` shows them under the route (`?limit=  how many ...`). The
 documentation only describes them: the handler still reads `request.query` and
 `request.parameters`, and checks what it gets.
 
+A route on its way out can be marked deprecated (since 1.4.0), once added: it
+keeps working, Swagger UI shows it struck through, and the list at `/` says what
+to use instead. `/usage` counts each route, so it shows when the old one is no
+longer used:
+
+```cpp
+server.get("/tel/gps/{device}", gps);
+server.deprecated("GET", "/tel/gps/{device}", "GET /gps/{device}");
+```
+
 A route of the program's own at `/`, `/openapi.json` or `/docs` is kept instead of the
 documentation's; `server.documentation(false)` (before `run()`) leaves all of it out, the 404s
 then plain.
