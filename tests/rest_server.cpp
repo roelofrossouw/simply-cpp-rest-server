@@ -288,6 +288,7 @@ int main() {
         CHECK(page.starts_with("HTTP/1.1 200"));
         CHECK(page.find("SwaggerUIBundle") != std::string::npos);
         CHECK(page.find("openapi.json") != std::string::npos);
+        CHECK(request(port, "GET", "/swagger").find("SwaggerUIBundle") != std::string::npos);
     }
 
     SECTION("A path that isn't there: 404, with the list");
