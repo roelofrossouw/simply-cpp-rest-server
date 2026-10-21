@@ -255,7 +255,9 @@ int main() {
         CHECK_EQ(headers["x-2wc-signature"].get<std::string>(), std::string{"sha256=00ff"});
         CHECK_EQ(headers["x-2wc-event"].get<std::string>(), std::string{"gps"});
         CHECK(!headers.contains("X-2WC-Event"));
-        CHECK_EQ(headers["x-tag"].get<std::string>(), std::string{"a, b"});
+        // Both values, in whichever order oatpp keeps them (it differs between macOS and Linux).
+        const auto tags = headers["x-tag"].get<std::string>();
+        CHECK(tags == "a, b" || tags == "b, a");
         CHECK_EQ(headers["authorization"].get<std::string>(), std::string{"Bearer abc"});
         CHECK_EQ(headers["content-type"].get<std::string>(), std::string{"application/json"});
         CHECK_EQ(headers["content-length"].get<std::string>(), std::to_string(raw.size()));
