@@ -39,17 +39,17 @@ namespace sc {
         // when it doesn't parse; body always holds the text.
         nlohmann::json json;
         // The values of the route's {name} segments, %XX decoded: {"device": "100000002623"} for
-        // GET /vms/locus/100000002623 on the route "/vms/locus/{device}" (since 1.3.0). Empty
-        // for a route without them.
+        // GET /vms/locus/100000002623 on the route "/vms/locus/{device}". Empty for a route
+        // without them.
         nlohmann::json parameters = nlohmann::json::object();
-        // The connection's own IP address: the proxy's, when there is one (since 1.5.0).
+        // The connection's own IP address: the proxy's, when there is one.
         std::string peer_address;
     };
 
     // What a documented parameter holds, for the OpenAPI document.
     enum class rest_parameter_type { string, integer, number, boolean };
 
-    // A route's parameter, for its documentation (since 1.4.0): one named like a {segment} of the
+    // A route's parameter, for its documentation: one named like a {segment} of the
     // path describes that path parameter, any other a query parameter (?name=...).
     struct rest_parameter {
         std::string name;
@@ -62,7 +62,6 @@ namespace sc {
     // The usual response content types. Any other can still be given as a string (rest_content_type).
     enum class content_type { text, json, csv, binary };
 
-    // The Content-Type header for each content_type, in the enum's order.
     inline constexpr std::array<std::string_view, 4> content_type_headers{
         "text/plain; charset=utf-8",
         "application/json",
@@ -124,25 +123,25 @@ namespace sc {
         rest_server &operator=(const rest_server &) = delete;
 
         // Routes match the path exactly, except a {name} segment, which matches any one segment
-        // and hands its value to the handler in rest_request::parameters: "/vms/locus/{device}"
-        // (since 1.3.0). Routes are tried in the order they were added.
+        // and hands its value to the handler in rest_request::parameters: "/vms/locus/{device}".
+        // Routes are tried in the order they were added.
         void get(std::string path, rest_handler handler);
         void post(std::string path, rest_handler handler);
         void bearer_get(std::string path, rest_handler handler);
         void bearer_post(std::string path, rest_handler handler);
-        // The same, with a description for the API's documentation (since 1.2.0).
+        // The same, with a description for the API's documentation.
         void get(std::string path, rest_handler handler, std::string description);
         void post(std::string path, rest_handler handler, std::string description);
         void bearer_get(std::string path, rest_handler handler, std::string description);
         void bearer_post(std::string path, rest_handler handler, std::string description);
-        // The same, with the route's parameters documented (since 1.4.0).
+        // The same, with the route's parameters documented.
         void get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void bearer_get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void bearer_post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void configure_jwt(jwt_configuration configuration);
 
-        // The API's documentation, made from the routes (since 1.2.0), served unless turned off:
+        // The API's documentation, made from the routes, served unless turned off:
         //   GET /              a plain list: each route's method, path, whether it needs a token,
         //                      and its description
         //   GET /openapi.json  the same as an OpenAPI 3.0 document (for Swagger UI, Postman, ...)
@@ -150,25 +149,25 @@ namespace sc {
         // Any other path answers 404 with that list. A route of the program's own at one of those
         // paths is kept instead. Before run().
         void documentation(bool served);
-        // What oatpp, underneath, writes to stderr (since 1.3.2): its errors and warnings by default
+        // What oatpp, underneath, writes to stderr: its errors and warnings by default
         // (sc::log_level::warning); info adds its info messages, debug its debug ones. For every
         // server in the process; may be called before or while one runs.
         static void log_level(sc::log_level level);
 
-        // The proxies whose X-Forwarded-For is believed (since 1.5.0), by IP address: a request from
-        // one of them has its remote_address (and the usage figures, and a token's source) taken
-        // from the header, the nearest address in it that isn't a trusted proxy itself. By default
-        // the local machine's, 127.0.0.1 and ::1, as with a proxy (Apache, nginx) on the same
-        // server for TLS; {} believes none. A request from anywhere else keeps its own address,
+        // The proxies whose X-Forwarded-For is believed, by IP address: a request from one of them
+        // has its remote_address (and the usage figures, and a token's source) taken from the
+        // header, the nearest address in it that isn't a trusted proxy itself. By default the
+        // local machine's, 127.0.0.1 and ::1, as with a proxy (Apache, nginx) on the same server
+        // for TLS; {} believes none. A request from anywhere else keeps its own address,
         // so a client can't claim another. Before run().
         void trusted_proxies(std::vector<std::string> addresses);
 
-        // Marks a route added before as deprecated in the documentation (since 1.4.0): Swagger UI
-        // shows it struck through, and the list at / says what to use instead ("GET /gps/{device}").
+        // Marks a route added before as deprecated in the documentation: Swagger UI shows it struck
+        // through, and the list at / says what to use instead ("GET /gps/{device}").
         // It still works. Throws std::invalid_argument for a route that isn't there. Before run().
         void deprecated(const std::string &method, const std::string &path, std::string replacement = {});
 
-        // Usage figures (since 1.3.0), kept from the start: requests by method, route (the
+        // Usage figures, kept from the start: requests by method, route (the
         // registered pattern, "unmatched" for a path no route has) and status; how long they
         // took (a histogram) and the bytes they sent; requests and errors by client address (the
         // first 1000 addresses, the rest as "other"); requests in flight. Served at GET /usage in
@@ -178,9 +177,7 @@ namespace sc {
         void show_usage(bool served);
         [[nodiscard]] nlohmann::json usage() const;
         [[nodiscard]] std::string usage_metrics() const;
-        // The figures back to zero, the clients forgotten.
         void reset_usage();
-        // The title, version and description the documentation gives the API.
         void api_info(std::string title, std::string version = {}, std::string description = {});
 
         // Serves requests until stop() is called, usually from another thread.
