@@ -136,7 +136,8 @@ int main() {
     // Everything a handler is told about the request, back as JSON.
     const auto inspect = [](const sc::rest_request &request) {
         const json seen{{"path", request.path}, {"query_string", request.query_string}, {"query", request.query},
-                        {"content_type", request.content_type}, {"json", request.json}, {"body", request.body}};
+                        {"content_type", request.content_type}, {"json", request.json}, {"body", request.body},
+                        {"headers", request.headers}};
         return sc::rest_response{200, seen.dump(), sc::content_type::json};
     };
     server.get("/inspect", inspect);
@@ -241,6 +242,24 @@ int main() {
 
         const auto text = response_body(request(port, "POST", "/inspect", "hello", {}, ""));
         CHECK(text["json"].is_null());
+    }
+
+    SECTION("Headers by lowercased name, repeats joined; the body kept byte for byte");
+    {
+        const std::string raw = "{ \"event\" :\t\"gps\",\r\n  \"n\":1.50 }  \n";
+        const auto seen = response_body(request(port, "POST", "/inspect", raw, "Bearer abc", "application/json",
+                                                "X-2WC-Signature: sha256=00ff\r\nX-2WC-Event: gps\r\n"
+                                                "X-Tag: a\r\nx-tag: b\r\n"));
+        CHECK_EQ(seen["body"].get<std::string>(), raw);
+        const auto &headers = seen["headers"];
+        CHECK_EQ(headers["x-2wc-signature"].get<std::string>(), std::string{"sha256=00ff"});
+        CHECK_EQ(headers["x-2wc-event"].get<std::string>(), std::string{"gps"});
+        CHECK(!headers.contains("X-2WC-Event"));
+        CHECK_EQ(headers["x-tag"].get<std::string>(), std::string{"a, b"});
+        CHECK_EQ(headers["authorization"].get<std::string>(), std::string{"Bearer abc"});
+        CHECK_EQ(headers["content-type"].get<std::string>(), std::string{"application/json"});
+        CHECK_EQ(headers["content-length"].get<std::string>(), std::to_string(raw.size()));
+        CHECK_EQ(headers["host"].get<std::string>(), std::string{"localhost"});
     }
 
     SECTION("JWT token creation");

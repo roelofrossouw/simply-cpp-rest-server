@@ -6,6 +6,7 @@
 #include <functional>
 #include <ip_endpoint.h>
 #include <log_level.h>
+#include <map>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -44,6 +45,10 @@ namespace sc {
         nlohmann::json parameters = nlohmann::json::object();
         // The connection's own IP address: the proxy's, when there is one.
         std::string peer_address;
+        // Every request header, by its lowercased name: {"x-2wc-signature": "..."}. A header sent
+        // more than once holds its values joined with ", ". body is the raw body, byte for byte,
+        // for checking a signature over it.
+        std::map<std::string, std::string> headers;
     };
 
     // What a documented parameter holds, for the OpenAPI document.
