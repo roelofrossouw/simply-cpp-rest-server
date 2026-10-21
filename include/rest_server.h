@@ -46,7 +46,7 @@ namespace sc {
         // The connection's own IP address: the proxy's, when there is one.
         std::string peer_address;
         // Every request header, by its lowercased name: {"x-2wc-signature": "..."}. A header sent
-        // more than once holds its values joined with ", ". body is the raw body, byte for byte,
+        // more than once holds its values joined with ", ", in no set order. body is the raw body, byte for byte,
         // for checking a signature over it.
         std::map<std::string, std::string> headers;
     };

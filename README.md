@@ -43,7 +43,7 @@ plus three parsed forms:
 
 `headers` holds every request header by its lowercased name
 (`request.headers.at("x-2wc-signature")`); a header sent more than once has its
-values joined with `", "`. `body` is the raw body, byte for byte, so a signed
+values joined with `", "` (in no set order). `body` is the raw body, byte for byte, so a signed
 webhook can be checked against it.
 
 ```cpp
