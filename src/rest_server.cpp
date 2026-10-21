@@ -1,5 +1,7 @@
 #include "rest_server.h"
 
+#include <core.h>
+
 #include <nlohmann/json.hpp>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -93,7 +95,7 @@ namespace {
     bool is_json_type(std::string type) {
         type = type.substr(0, type.find(';'));
         while (!type.empty() && std::isspace(static_cast<unsigned char>(type.back()))) type.pop_back();
-        std::ranges::transform(type, type.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        type = sc::lowercase(type);
         return type == "application/json" || type.ends_with("+json");
     }
 
@@ -198,6 +200,10 @@ namespace {
         return value ? std::string(value->c_str(), value->size()) : std::string{};
     }
 
+    sc::rest_response error_response(const int status, const std::string_view message) {
+        return {status, json{{"error", message}}.dump(), sc::content_type::json};
+    }
+
     struct jwt_claims {
         std::string subject;
         std::string type;
@@ -227,10 +233,10 @@ namespace {
                 const auto username = credentials.at("username").get<std::string>();
                 const auto password = credentials.at("password").get<std::string>();
                 const auto subject = configuration_.validate_credentials(username, password);
-                if (subject.empty()) return unauthorized("Invalid credentials");
+                if (subject.empty()) return error_response(401, "Invalid credentials");
                 return token_response(subject, request.remote_address, now(), std::nullopt);
             } catch (const json::exception &) {
-                return bad_request("Invalid token request");
+                return error_response(400, "Invalid token request");
             }
         }
 
@@ -238,11 +244,11 @@ namespace {
             try {
                 const auto refresh_token = json::parse(request.body).at("refresh_token").get<std::string>();
                 const auto claims = verify(refresh_token, "refresh");
-                if (!claims) return unauthorized("Invalid refresh token");
-                return token_response(claims->subject, request.remote_address, now(), claims->expires_at, refresh_token,
-                                      claims->issued_at);
+                if (!claims) return error_response(401, "Invalid refresh token");
+                return token_response(claims->subject, request.remote_address, now(),
+                                      kept_refresh{refresh_token, claims->issued_at, claims->expires_at});
             } catch (const json::exception &) {
-                return bad_request("Invalid refresh request");
+                return error_response(400, "Invalid refresh request");
             }
         }
 
@@ -256,6 +262,13 @@ namespace {
         }
 
     private:
+        // A refresh token being reused, with the times it was issued with.
+        struct kept_refresh {
+            std::string token;
+            unix_seconds issued_at;
+            unix_seconds expires_at;
+        };
+
         std::string sign(const std::string_view payload) const {
             const auto header = base64url_encode(R"({"alg":"HS256","typ":"JWT"})");
             const auto encoded_payload = base64url_encode(payload);
@@ -303,9 +316,7 @@ namespace {
         // source is the client's IP address. A refresh reuses the refresh token, so that keeps the
         // address it was first issued to, while the new access token gets the refreshing client's.
         sc::rest_response token_response(const std::string &subject, const std::string &source, const unix_seconds issued_at,
-                                         const std::optional<unix_seconds> refresh_expires_at,
-                                         const std::optional<std::string> existing_refresh_token = std::nullopt,
-                                         const std::optional<unix_seconds> refresh_issued_at = std::nullopt) const {
+                                         const std::optional<kept_refresh> &kept) const {
             const auto access_expires_at = issued_at + configuration_.access_token_lifetime.count();
             const auto access_token = sign(json{
                                                {"sub", subject},
@@ -315,17 +326,16 @@ namespace {
                                                {"exp", access_expires_at},
                                            }
                                                .dump());
-            const auto original_issued_at = refresh_issued_at.value_or(issued_at);
-            const auto refresh_expires = refresh_expires_at.value_or(
-                original_issued_at + configuration_.refresh_token_lifetime.count());
-            const auto refresh_token = existing_refresh_token.value_or(sign(json{
-                                                                             {"sub", subject},
-                                                                             {"source", source},
-                                                                             {"type", "refresh"},
-                                                                             {"iat", original_issued_at},
-                                                                             {"exp", refresh_expires},
-                                                                         }
-                                                                             .dump()));
+            const auto refresh_expires = kept ? kept->expires_at : issued_at + configuration_.refresh_token_lifetime.count();
+            const auto refresh_token = kept ? kept->token
+                                            : sign(json{
+                                                       {"sub", subject},
+                                                       {"source", source},
+                                                       {"type", "refresh"},
+                                                       {"iat", issued_at},
+                                                       {"exp", refresh_expires},
+                                                   }
+                                                       .dump());
             return {200,
                     json{
                         {"access_token", access_token},
@@ -336,14 +346,6 @@ namespace {
                     }
                         .dump(),
                     sc::content_type::json};
-        }
-
-        static sc::rest_response bad_request(const std::string_view message) {
-            return {400, json{{"error", message}}.dump(), sc::content_type::json};
-        }
-
-        static sc::rest_response unauthorized(const std::string_view message) {
-            return {401, json{{"error", message}}.dump(), sc::content_type::json};
         }
 
         sc::jwt_configuration configuration_;
@@ -408,7 +410,7 @@ namespace {
             if (other_.requests) add("other", other_);
             std::stable_sort(clients.begin(), clients.end(), [](const json &a, const json &b) { return a["requests"] > b["requests"]; });
             return {{"since", iso(since_)}, {"uptime_s", uptime()}, {"in_flight", in_flight_.load()}, {"requests", total},
-                    {"clients_seen", clients_.size() + (other_.requests ? 1 : 0)}, {"routes", routes}, {"clients", clients}};
+                    {"clients_seen", clients_seen()}, {"routes", routes}, {"clients", clients}};
         }
 
         // Prometheus' text format (version 0.0.4).
@@ -455,7 +457,7 @@ namespace {
             for (const auto &[address, who]: clients_) client("sc_rest_client_errors_total", address, who.errors);
             if (other_.requests) client("sc_rest_client_errors_total", "other", other_.errors);
             header("sc_rest_clients", "gauge", "Client addresses seen");
-            out += "sc_rest_clients " + std::to_string(clients_.size() + (other_.requests ? 1 : 0)) + "\n";
+            out += "sc_rest_clients " + std::to_string(clients_seen()) + "\n";
             return out;
         }
 
@@ -470,6 +472,8 @@ namespace {
             std::uint64_t requests = 0, errors = 0;
             std::chrono::system_clock::time_point last_seen{};
         };
+
+        std::size_t clients_seen() const { return clients_.size() + (other_.requests ? 1 : 0); }
 
         double uptime() const {
             return std::chrono::duration<double>(std::chrono::system_clock::now() - since_).count();
@@ -598,7 +602,7 @@ namespace {
 
             if (jwt_) {
                 auto claims = jwt_->access_token_claims(rest_request.authorization);
-                if (!claims) return {401, R"({"error":"Unauthorized"})", sc::content_type::json};
+                if (!claims) return error_response(401, "Unauthorized");
                 rest_request.claims = std::move(*claims);
             }
             return handler_(rest_request);
@@ -648,8 +652,7 @@ public:
     }
 
     void configure_jwt(jwt_configuration configuration) {
-        const std::lock_guard lock{mutex_};
-        if (server_) throw std::logic_error("JWT cannot be configured after the server starts");
+        const auto lock = lock_before_run("JWT cannot be configured");
         if (jwt_) throw std::logic_error("JWT is already configured");
 
         jwt_ = std::make_shared<jwt_service>(std::move(configuration));
@@ -664,29 +667,25 @@ public:
     }
 
     void documentation(const bool served) {
-        const std::lock_guard lock{mutex_};
-        if (server_) throw std::logic_error("REST documentation cannot be changed after the server starts");
+        const auto lock = lock_before_run("REST documentation cannot be changed");
         documented_ = served;
     }
 
     void deprecate(const std::string &method, const std::string &path, std::string replacement) {
-        const std::lock_guard lock{mutex_};
-        if (server_) throw std::logic_error("REST routes cannot be changed after the server starts");
-        const auto found = std::ranges::find_if(routes_, [&](const route &each) { return each.method == method && each.path == path; });
+        const auto lock = lock_before_run("REST routes cannot be changed");
+        const auto found = find_route(method, path);
         if (found == routes_.end()) throw std::invalid_argument("No REST route " + method + " " + path + " to deprecate");
         found->deprecated = true;
         found->replacement = std::move(replacement);
     }
 
     void trusted_proxies(std::vector<std::string> addresses) {
-        const std::lock_guard lock{mutex_};
-        if (server_) throw std::logic_error("REST trusted proxies cannot be changed after the server starts");
+        const auto lock = lock_before_run("REST trusted proxies cannot be changed");
         proxies_ = std::move(addresses);
     }
 
     void show_usage(const bool served) {
-        const std::lock_guard lock{mutex_};
-        if (server_) throw std::logic_error("REST usage cannot be changed after the server starts");
+        const auto lock = lock_before_run("REST usage cannot be changed");
         usage_served_ = served;
     }
 
@@ -696,7 +695,7 @@ public:
         std::string title, version;
         {
             const std::lock_guard lock{mutex_};
-            title = title_.empty() ? "API" : title_;
+            title = api_title();
             version = version_;
         }
         return usage_->metrics(title, version);
@@ -716,8 +715,7 @@ public:
         if (path.empty() || path.front() != '/') throw std::invalid_argument("REST route path must start with '/'");
         if (!handler) throw std::invalid_argument("REST route handler must not be empty");
 
-        const std::lock_guard lock{mutex_};
-        if (server_) throw std::logic_error("REST routes cannot be added after the server starts");
+        const auto lock = lock_before_run("REST routes cannot be added");
         if (bearer_required && !jwt_) throw std::logic_error("JWT must be configured before adding bearer routes");
         for (const auto &each: parameters)
             if (each.name.empty()) throw std::invalid_argument("REST route parameters need a name");
@@ -802,10 +800,24 @@ private:
         std::string replacement;
     };
 
+    // Locks, and throws std::logic_error ("<what> after the server starts") once it runs.
+    std::unique_lock<std::mutex> lock_before_run(const std::string_view what) const {
+        std::unique_lock lock{mutex_};
+        if (server_) throw std::logic_error(std::string{what} + " after the server starts");
+        return lock;
+    }
+
+    std::vector<route>::iterator find_route(const std::string_view method, const std::string_view path) {
+        return std::ranges::find_if(routes_, [&](const route &each) { return each.method == method && each.path == path; });
+    }
+
+    // Under the lock.
+    std::string api_title() const { return title_.empty() ? "API" : title_; }
+
     // GET /usage: the usage figures for Prometheus, or as JSON with ?format=json; unless the
     // program has a /usage of its own.
     void add_usage() {
-        if (std::ranges::any_of(routes_, [](const route &each) { return each.method == "GET" && each.path == "/usage"; })) return;
+        if (find_route("GET", "/usage") != routes_.end()) return;
         routes_.push_back({"GET", "/usage", [this](const rest_request &request) {
                                if (request.query.value("format", std::string{}) == "json") {
                                    return rest_response{200, usage().dump(2), content_type::json};
@@ -820,9 +832,7 @@ private:
     // The documentation's routes (/, /openapi.json, /docs), for the routes as they are at
     // run(): each one a program hasn't registered itself.
     void add_documentation() {
-        const auto taken = [this](const std::string &method, const std::string &path) {
-            return std::ranges::any_of(routes_, [&](const route &each) { return each.method == method && each.path == path; });
-        };
+        const auto taken = [this](const std::string &method, const std::string &path) { return find_route(method, path) != routes_.end(); };
         struct entry {
             std::string method, path, description;
             bool bearer;
@@ -843,7 +853,7 @@ private:
         // GET /: one line a route, "GET  /status   the figures (needs a bearer token)".
         std::size_t width = 0;
         for (const auto &each: listed) width = std::max(width, each.path.size());
-        std::string help = (title_.empty() ? std::string{"API"} : title_) + (version_.empty() ? "" : " " + version_) + "\n";
+        std::string help = api_title() + (version_.empty() ? "" : " " + version_) + "\n";
         if (!description_.empty()) help += description_ + "\n";
         help += "\n";
         for (const auto &each: listed) {
@@ -870,8 +880,7 @@ private:
         // GET /openapi.json
         json paths = json::object();
         for (const auto &each: listed) {
-            std::string method = each.method;
-            std::ranges::transform(method, method.begin(), [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            const auto method = sc::lowercase(each.method);
             json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
             if (!each.description.empty()) operation["summary"] = each.description;
             if (each.deprecated) {
@@ -921,14 +930,14 @@ private:
             paths[each.path][method] = operation;
         }
         json document{{"openapi", "3.0.3"},
-                      {"info", {{"title", title_.empty() ? std::string{"API"} : title_}, {"version", version_.empty() ? std::string{"1"} : version_}}},
+                      {"info", {{"title", api_title()}, {"version", version_.empty() ? std::string{"1"} : version_}}},
                       {"paths", paths}};
         if (!description_.empty()) document["info"]["description"] = description_;
         if (jwt_) document["components"] = {{"securitySchemes", {{"bearer", {{"type", "http"}, {"scheme", "bearer"}, {"bearerFormat", "JWT"}}}}}};
 
         // GET /docs: Swagger UI, from a CDN (pinned), on the document above.
         const std::string page = R"(<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>)" + (title_.empty() ? std::string{"API"} : title_) + R"(</title>
+<html lang="en"><head><meta charset="utf-8"><title>)" + api_title() + R"(</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"></head>
 <body><div id="swagger-ui"></div>
 <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
