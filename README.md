@@ -41,6 +41,11 @@ plus three parsed forms:
   or `...+json`), or when there is none and the body is a JSON object or array.
   It is `null` otherwise, or when the body doesn't parse.
 
+`headers` holds every request header by its lowercased name
+(`request.headers.at("x-2wc-signature")`); a header sent more than once has its
+values joined with `", "`. `body` is the raw body, byte for byte, so a signed
+webhook can be checked against it.
+
 ```cpp
 // POST /orders?dry_run=1  {"item": "book", "count": 2}
 sc::rest_response order(const sc::rest_request &request) {

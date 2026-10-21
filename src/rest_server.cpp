@@ -587,6 +587,10 @@ namespace {
                 client,
             };
             rest_request.peer_address = peer;
+            for (const auto &[name, value]: request.getHeaders().getAll()) {
+                auto [it, added] = rest_request.headers.try_emplace(sc::lowercase(name.std_str()), value.std_str());
+                if (!added) it->second += ", " + value.std_str();
+            }
             if (question != std::string::npos) {
                 rest_request.query_string = target.substr(question + 1);
                 rest_request.query = parse_query(rest_request.query_string);
