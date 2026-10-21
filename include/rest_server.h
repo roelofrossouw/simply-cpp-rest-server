@@ -167,6 +167,12 @@ namespace sc {
         // so a client can't claim another. Before run().
         void trusted_proxies(std::vector<std::string> addresses);
 
+        // The documentation's group for the routes added after this (until the next group()): Swagger
+        // UI shows each group as a section, and the list at / gives each a heading. Routes without
+        // one, the library's own among them, are "General", first; then the groups in the order
+        // they're first used; deprecated routes come last, as "Deprecated". Before run().
+        void group(std::string name);
+
         // Marks a route added before as deprecated in the documentation: Swagger UI shows it struck
         // through, and the list at / says what to use instead ("GET /gps/{device}").
         // It still works. Throws std::invalid_argument for a route that isn't there. Before run().

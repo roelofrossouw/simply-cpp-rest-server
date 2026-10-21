@@ -721,7 +721,12 @@ public:
         for (const auto &each: parameters)
             if (each.name.empty()) throw std::invalid_argument("REST route parameters need a name");
         routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? jwt_ : nullptr, std::move(description),
-                           std::move(parameters)});
+                           std::move(parameters), false, {}, group_});
+    }
+
+    void group(std::string name) {
+        const auto lock = lock_before_run("REST route groups cannot be changed");
+        group_ = std::move(name);
     }
 
     void run() {
@@ -799,6 +804,7 @@ private:
         std::vector<rest_parameter> parameters;
         bool deprecated = false;
         std::string replacement;
+        std::string group; // empty: "General"
     };
 
     // Locks, and throws std::logic_error ("<what> after the server starts") once it runs.
@@ -840,16 +846,33 @@ private:
             std::vector<rest_parameter> parameters;
             bool deprecated = false;
             std::string replacement;
+            std::string group;
         };
+        // Groups in the documentation: "General" first (routes without one, the library's own among
+        // them), then the program's in the order it first used them, then "Deprecated".
+        const auto group_of = [](const auto &each) {
+            return each.deprecated ? std::string{"Deprecated"} : each.group.empty() ? std::string{"General"} : each.group;
+        };
+        std::vector<std::string> groups{"General"};
+        for (const auto &each: routes_)
+            if (const auto name = group_of(each); name != "Deprecated" && std::ranges::find(groups, name) == groups.end()) groups.push_back(name);
+        groups.emplace_back("Deprecated");
+        const auto rank = [&](const entry &each) { return std::ranges::find(groups, group_of(each)) - groups.begin(); };
         std::vector<entry> listed;
         for (const auto &each: routes_)
-            listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters, each.deprecated, each.replacement});
+            listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters, each.deprecated, each.replacement,
+                              each.group});
         const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
                                      {"GET", "/openapi.json", "The API's description, for tools that read it", false},
                                      {"GET", "/docs", "These routes in a browser, to read and try", false}};
         for (const auto &each: own)
             if (!taken(each.method, each.path)) listed.push_back(each);
-        std::ranges::stable_sort(listed, [](const entry &a, const entry &b) { return a.path != b.path ? a.path < b.path : a.method < b.method; });
+        std::ranges::stable_sort(listed, [&](const entry &a, const entry &b) {
+            if (rank(a) != rank(b)) return rank(a) < rank(b);
+            return a.path != b.path ? a.path < b.path : a.method < b.method;
+        });
+        // Only a list with more than one group gets headings.
+        const bool headed = std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) != "General"; });
 
         // GET /: one line a route, "GET  /status   the figures (needs a bearer token)".
         std::size_t width = 0;
@@ -857,7 +880,12 @@ private:
         std::string help = api_title() + (version_.empty() ? "" : " " + version_) + "\n";
         if (!description_.empty()) help += description_ + "\n";
         help += "\n";
+        std::string heading;
         for (const auto &each: listed) {
+            if (headed && group_of(each) != heading) {
+                heading = group_of(each);
+                help += (help.ends_with("\n\n") ? "" : "\n") + heading + "\n";
+            }
             std::string line = each.method + std::string(each.method.size() < 5 ? 5 - each.method.size() : 1, ' ') + each.path;
             line += std::string(width + 2 - each.path.size(), ' ') + each.description;
             if (each.bearer) line += each.description.empty() ? "(needs a bearer token)" : " (needs a bearer token)";
@@ -884,6 +912,7 @@ private:
             const auto method = sc::lowercase(each.method);
             json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
             if (!each.description.empty()) operation["summary"] = each.description;
+            operation["tags"] = json::array({group_of(each)});
             if (each.deprecated) {
                 operation["deprecated"] = true;
                 if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + ".";
@@ -934,6 +963,10 @@ private:
                       {"info", {{"title", api_title()}, {"version", version_.empty() ? std::string{"1"} : version_}}},
                       {"paths", paths}};
         if (!description_.empty()) document["info"]["description"] = description_;
+        // Swagger UI shows the groups in this order.
+        document["tags"] = json::array();
+        for (const auto &name: groups)
+            if (std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) == name; })) document["tags"].push_back({{"name", name}});
         if (jwt_) document["components"] = {{"securitySchemes", {{"bearer", {{"type", "http"}, {"scheme", "bearer"}, {"bearerFormat", "JWT"}}}}}};
 
         // GET /docs: Swagger UI, from a CDN (pinned), on the document above.
@@ -975,6 +1008,7 @@ private:
     std::condition_variable state_changed_;
     run_state state_ = run_state::idle;
     std::vector<route> routes_;
+    std::string group_; // group()
     std::shared_ptr<const jwt_service> jwt_;
     bool documented_ = true;
     bool documentation_added_ = false; // a second run() keeps the first's
@@ -1054,6 +1088,10 @@ void sc::rest_server::log_level(const sc::log_level level) {
             else logger->disablePriority(priority);
         }
     }
+}
+
+void sc::rest_server::group(std::string name) {
+    implementation_->group(std::move(name));
 }
 
 void sc::rest_server::deprecated(const std::string &method, const std::string &path, std::string replacement) {
