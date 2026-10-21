@@ -279,6 +279,19 @@ The list at `/` shows them under the route (`?limit=  how many ...`). The
 documentation only describes them: the handler still reads `request.query` and
 `request.parameters`, and checks what it gets.
 
+Routes can be grouped: `server.group("Tracking")` puts the routes added after it
+in that group, until the next `group()`. Swagger UI shows each group as a
+section, and the list at `/` gives each a heading. Routes without a group, the
+library's own among them (`/`, `/docs`, the logins, `/usage`), are "General" and
+come first; then the groups in the order they're first used; deprecated routes
+come last, as "Deprecated".
+
+```cpp
+server.bearer_get("/account", account, "Who the token is for");
+server.group("Tracking");
+server.bearer_get("/gps/{device}", gps, "A device's live position");
+```
+
 A route on its way out can be marked deprecated (since 1.4.0), once added: it
 keeps working, Swagger UI shows it struck through, and the list at `/` says what
 to use instead. `/usage` counts each route, so it shows when the old one is no

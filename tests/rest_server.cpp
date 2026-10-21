@@ -146,6 +146,7 @@ int main() {
     const auto located = [](const sc::rest_request &request) {
         return sc::rest_response{200, json{{"parameters", request.parameters}, {"path", request.path}}.dump(), sc::content_type::json};
     };
+    server.group("Tracking"); // the routes below, until the next group()
     server.get("/tel/location/{lat}/{lng}", located, "A place's name", {
         {.name = "lat", .description = "degrees north", .type = sc::rest_parameter_type::number, .example = "-26.96"},
         {.name = "radius", .description = "metres around it", .type = sc::rest_parameter_type::integer, .example = "500"},
@@ -153,6 +154,7 @@ int main() {
     server.get("/tel/gps/{device}", located);
     server.get("/tel/gps", located);
     server.deprecated("GET", "/tel/gps", "GET /gps");
+    server.group({}); // back to General
     server.get("/claims", [](const sc::rest_request &request) {
         return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
     });
@@ -371,6 +373,17 @@ int main() {
         CHECK(text.find("{lat}  degrees north") != std::string::npos);
         CHECK(!document["paths"]["/tel/gps"]["get"].contains("parameters"));
         CHECK(document["paths"]["/tel/gps"]["get"]["deprecated"].get<bool>());
+        // Groups: General first (the library's own routes too), then Tracking, then Deprecated.
+        CHECK_EQ(document["tags"].dump(), std::string{R"([{"name":"General"},{"name":"Tracking"},{"name":"Deprecated"}])"});
+        CHECK_EQ(document["paths"]["/tel/gps/{device}"]["get"]["tags"][0].get<std::string>(), std::string{"Tracking"});
+        CHECK_EQ(document["paths"]["/tel/gps"]["get"]["tags"][0].get<std::string>(), std::string{"Deprecated"}); // deprecated wins
+        CHECK_EQ(document["paths"]["/claims"]["get"]["tags"][0].get<std::string>(), std::string{"General"});
+        CHECK_EQ(document["paths"]["/create_token"]["post"]["tags"][0].get<std::string>(), std::string{"General"});
+        CHECK_EQ(document["paths"]["/docs"]["get"]["tags"][0].get<std::string>(), std::string{"General"});
+        const auto general = text.find("\nGeneral\n"), tracking = text.find("\nTracking\n"), deprecated = text.find("\nDeprecated\n");
+        CHECK(general != std::string::npos && tracking != std::string::npos && deprecated != std::string::npos);
+        CHECK(general < tracking && tracking < deprecated);
+        CHECK(text.find("GET  /tel/gps/{device}") > tracking && text.find("GET  /tel/gps/{device}") < deprecated);
         CHECK_EQ(document["paths"]["/tel/gps"]["get"]["description"].get<std::string>(), std::string{"Deprecated: use GET /gps."});
         CHECK(!document["paths"]["/health"]["get"].contains("deprecated"));
         CHECK(text.find("GET  /tel/gps                   (deprecated: use GET /gps)") != std::string::npos ||
