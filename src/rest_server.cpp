@@ -99,7 +99,6 @@ namespace {
         return type == "application/json" || type.ends_with("+json");
     }
 
-    // The body as JSON when it is JSON (see rest_request::json), else null.
     json parse_body(const std::string &body, const std::string &content_type) {
         if (content_type.empty()) {
             const auto first = body.find_first_not_of(" \t\r\n");
@@ -113,7 +112,7 @@ namespace {
 
     std::mutex environment_mutex;
     std::size_t environment_users = 0;
-    sc::log_level oatpp_level = sc::log_level::warning; // rest_server::log_level()
+    sc::log_level oatpp_level = sc::log_level::warning;
 
     // oatpp's priorities that a level shows: errors, warnings, info, then debug and verbose.
     v_uint32 oatpp_mask(const sc::log_level level) {
@@ -252,7 +251,6 @@ namespace {
             }
         }
 
-        // The payload of a valid "Bearer <access token>" authorization, or nullopt.
         std::optional<json> access_token_claims(const std::string_view authorization) const {
             constexpr std::string_view prefix = "Bearer ";
             if (!authorization.starts_with(prefix)) return std::nullopt;
@@ -262,7 +260,6 @@ namespace {
         }
 
     private:
-        // A refresh token being reused, with the times it was issued with.
         struct kept_refresh {
             std::string token;
             unix_seconds issued_at;
@@ -963,14 +960,13 @@ private:
                                nullptr, ""});
     }
 
-    // Whether the latest run() has started serving yet, or has ended (stopped or failed).
     enum class run_state { idle, running, ended };
 
     ip_endpoint endpoint_;
     mutable std::mutex mutex_;
     std::shared_ptr<usage_stats> usage_ = std::make_shared<usage_stats>();
     bool usage_served_ = true;
-    std::vector<std::string> proxies_{"127.0.0.1", "::1"}; // trusted_proxies()
+    std::vector<std::string> proxies_{"127.0.0.1", "::1"};
     bool usage_added_ = false;
     std::condition_variable state_changed_;
     run_state state_ = run_state::idle;
