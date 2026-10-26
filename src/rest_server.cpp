@@ -1039,25 +1039,48 @@ private:
 
         // GET /docs: Swagger UI, from a CDN (pinned), on the document above, named relative to the
         // page: /docs reads /openapi.json, and behind a proxy /man/docs reads /man/openapi.json.
-        const std::string token_box = hidden == 0 ? std::string{} : R"(<form id="token" style="font:14px sans-serif;margin:16px 20px 0">
-<label>Bearer token <input id="bearer" type="password" size="44" autocomplete="off"></label>
-<button>Show all routes</button> <a href="#" id="forget">Forget it</a>
-<span style="color:#666">)" + std::to_string(hidden) + R"( routes need a token. It stays in this browser tab only.</span></form>
+        // In Swagger UI's look: centred over its page, its font and sizes, its green and red
+        // buttons; the note under the line.
+        const std::string token_box = hidden == 0 ? std::string{} : R"(<style>
+#token { max-width: 1460px; margin: 24px auto 0; padding: 0 20px; box-sizing: border-box; text-align: center;
+         font-family: sans-serif; color: #3b4151; }
+#token .line { display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 16px; }
+#token label { font-weight: 700; }
+#token input { width: 420px; max-width: 100%; padding: 8px 10px; font-size: 15px; border: 1px solid #d9d9d9;
+               border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+#token button { padding: 7px 23px; font-size: 14px; font-weight: 700; border: 2px solid; border-radius: 4px;
+                background: transparent; cursor: pointer; font-family: sans-serif; }
+#token .show { color: #49cc90; border-color: #49cc90; }
+#token .forget { color: #ff6060; border-color: #ff6060; }
+#token .note { margin-top: 8px; font-size: 13px; color: #6b7280; }
+</style>
+<form id="token"><div class="line"><label for="bearer">Bearer token</label>
+<input id="bearer" type="password" autocomplete="off">
+<button class="show" type="submit">Show all routes</button>
+<button class="forget" type="button" id="forget">Forget it</button></div>
+<div class="note" id="note">)" + std::to_string(hidden) + (hidden == 1 ? " route needs" : " routes need") +
+                                                        R"( a token. It stays in this browser tab only.</div></form>
 )";
-        // The token from the box (kept for this tab, per page) goes with every request the page
-        // makes: openapi.json, so the hidden routes show, and Try it out.
+        // The token from the box (kept for this tab, per page) goes with the request for
+        // openapi.json, so the hidden routes show, and into Swagger UI's Authorize, so Try it out
+        // sends it too.
         const std::string script = hidden == 0 ? R"(window.onload = () => SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui"});)"
                                                : R"(const key = "bearer:" + location.pathname;
 window.onload = () => {
   const box = document.getElementById("bearer");
-  box.value = sessionStorage.getItem(key) || "";
+  const token = sessionStorage.getItem(key) || "";
+  box.value = token;
+  if (token) document.getElementById("note").textContent = "With the token: every route is shown, and Authorize uses it. It stays in this browser tab only.";
   document.getElementById("token").onsubmit = (e) => { e.preventDefault(); sessionStorage.setItem(key, box.value.trim()); location.reload(); };
-  document.getElementById("forget").onclick = (e) => { e.preventDefault(); sessionStorage.removeItem(key); location.reload(); };
-  SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui", requestInterceptor: (request) => {
-    const token = sessionStorage.getItem(key);
-    if (token && !request.headers.Authorization) request.headers.Authorization = "Bearer " + token;
-    return request;
-  }});
+  document.getElementById("forget").onclick = () => { sessionStorage.removeItem(key); location.reload(); };
+  const ui = SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui",
+    requestInterceptor: (request) => {
+      if (token && request.url.endsWith("openapi.json")) request.headers.Authorization = "Bearer " + token;
+      return request;
+    },
+    onComplete: () => {
+      if (token) ui.authActions.authorize({bearer: {name: "bearer", schema: {type: "http", scheme: "bearer"}, value: token}});
+    }});
 };)";
         const std::string page = R"(<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>)" + api_title() + R"(</title>
