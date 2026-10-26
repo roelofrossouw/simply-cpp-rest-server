@@ -1036,6 +1036,15 @@ private:
         std::ranges::copy_if(listed, std::back_inserter(open), [](const entry &each) { return !each.bearer; });
         const auto hidden = documentation_needs_token_ ? listed.size() - open.size() : 0;
         const auto public_ = hidden > 0 ? build(open, hidden) : all;
+        // The open routes' lists again, for a request whose token was refused, saying so: the text
+        // in a line on top, the document in "x-token", which /docs reads to warn.
+        const auto refused = [&public_] {
+            auto document = json::parse(public_.second);
+            document["x-token"] = "refused";
+            return std::pair{"The bearer token sent isn't valid, or has expired: only the routes that need none are listed.\n\n" +
+                                     public_.first,
+                             document.dump(2)};
+        }();
 
         // GET /docs: Swagger UI, from a CDN (pinned), on the document above, named relative to the
         // page: /docs reads /openapi.json, and behind a proxy /man/docs reads /man/openapi.json.
@@ -1053,6 +1062,7 @@ private:
 #token .show { color: #49cc90; border-color: #49cc90; }
 #token .forget { color: #ff6060; border-color: #ff6060; }
 #token .note { margin-top: 8px; font-size: 13px; color: #6b7280; }
+#token .note.refused { color: #ff6060; font-weight: 700; }
 </style>
 <form id="token"><div class="line"><label for="bearer">Bearer token</label>
 <input id="bearer" type="password" autocomplete="off">
@@ -1063,14 +1073,30 @@ private:
 )";
         // The token from the box (kept for this tab, per page) goes with the request for
         // openapi.json, so the hidden routes show, and into Swagger UI's Authorize, so Try it out
-        // sends it too.
+        // sends it too. A token the server refuses gets a warning instead, saying when it expired
+        // if it's a JWT past its "exp".
         const std::string script = hidden == 0 ? R"(window.onload = () => SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui"});)"
                                                : R"(const key = "bearer:" + location.pathname;
 window.onload = () => {
   const box = document.getElementById("bearer");
   const token = sessionStorage.getItem(key) || "";
   box.value = token;
-  if (token) document.getElementById("note").textContent = "With the token: every route is shown, and Authorize uses it. It stays in this browser tab only.";
+  const note = document.getElementById("note");
+  if (token) note.textContent = "With the token: every route is shown, and Authorize uses it. It stays in this browser tab only.";
+  let refused = false;
+  const expiry = () => {
+    try {
+      const claims = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      return claims.exp ? new Date(claims.exp * 1000) : null;
+    } catch (error) { return null; }
+  };
+  const refuse = () => {
+    refused = true;
+    const expired = expiry();
+    note.className = "note refused";
+    note.textContent = (expired && expired < new Date() ? "This token expired at " + expired.toLocaleString() : "This token isn't valid") +
+      ": only the routes that need none are shown. Enter another one, or forget it.";
+  };
   document.getElementById("token").onsubmit = (e) => { e.preventDefault(); sessionStorage.setItem(key, box.value.trim()); location.reload(); };
   document.getElementById("forget").onclick = () => { sessionStorage.removeItem(key); location.reload(); };
   const ui = SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui",
@@ -1078,8 +1104,18 @@ window.onload = () => {
       if (token && request.url.endsWith("openapi.json")) request.headers.Authorization = "Bearer " + token;
       return request;
     },
+    responseInterceptor: (response) => {
+      if (token && response.url.endsWith("openapi.json")) {
+        let description = response.body;
+        if (!description || typeof description !== "object") {
+          try { description = JSON.parse(response.text); } catch (error) { description = {}; }
+        }
+        if (description["x-token"] === "refused") refuse();
+      }
+      return response;
+    },
     onComplete: () => {
-      if (token) ui.authActions.authorize({bearer: {name: "bearer", schema: {type: "http", scheme: "bearer"}, value: token}});
+      if (token && !refused) ui.authActions.authorize({bearer: {name: "bearer", schema: {type: "http", scheme: "bearer"}, value: token}});
     }});
 };)";
         const std::string page = R"(<!DOCTYPE html>
@@ -1090,9 +1126,12 @@ window.onload = () => {
 <script>)" + script + R"(</script>
 </body></html>
 )";
-        // The full lists for a request with a valid bearer token, else the open routes' only.
-        const auto pick = [bearer = bearer_, all, public_](const rest_request &request) -> const std::pair<std::string, std::string> & {
-            return bearer && bearer->claims(request.authorization) ? all : public_;
+        // The full lists for a request with a valid bearer token, else the open routes' only:
+        // saying the token was refused when one was sent and routes are hidden.
+        const auto pick = [bearer = bearer_, all, public_, refused, hidden](const rest_request &request)
+                -> const std::pair<std::string, std::string> & {
+            if (bearer && bearer->claims(request.authorization)) return all;
+            return hidden > 0 && !request.authorization.empty() ? refused : public_;
         };
         const auto serve = [this, &taken](const std::string &path, rest_handler handler) {
             if (taken("GET", path)) return;

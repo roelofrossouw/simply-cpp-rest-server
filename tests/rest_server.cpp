@@ -519,6 +519,16 @@ int main() {
         CHECK(open_document["info"]["description"].get<std::string>().find("For the tests\n\n**2 more routes need a bearer token.**") == 0);
         CHECK(!open_document["components"]["securitySchemes"]["bearer"].contains("bearerFormat")); // not a JWT
         CHECK(request(token_port, "GET", "/nothing").find("/containers") == std::string::npos); // the 404's list too
+        CHECK(open_list.find("isn't valid") == std::string::npos); // no token, no warning
+        CHECK(!open_document.contains("x-token"));
+
+        // A token that's refused: the open routes, saying so.
+        const auto refused_list = request(token_port, "GET", "/", {}, "Bearer wrong");
+        CHECK(refused_list.find("The bearer token sent isn't valid, or has expired") != std::string::npos);
+        CHECK(refused_list.find("GET  /health") != std::string::npos);
+        const auto refused_document = response_body(request(token_port, "GET", "/openapi.json", {}, "Bearer wrong"));
+        CHECK_EQ(refused_document.value("x-token", std::string{}), std::string{"refused"});
+        CHECK(!refused_document["paths"].contains("/containers"));
 
         // With it: everything, and no note.
         const auto full_list = request(token_port, "GET", "/", {}, bearer);
@@ -528,11 +538,13 @@ int main() {
         const auto full_document = response_body(request(token_port, "GET", "/openapi.json", {}, bearer));
         CHECK(full_document["paths"].contains("/containers"));
         CHECK_EQ(full_document["info"]["description"].get<std::string>(), std::string{"For the tests"});
+        CHECK(!full_document.contains("x-token"));
 
         // The page: a box for the token, sent with its requests.
         const auto page = request(token_port, "GET", "/docs");
         CHECK(page.find("id=\"bearer\"") != std::string::npos);
         CHECK(page.find("requestInterceptor") != std::string::npos);
+        CHECK(page.find("x-token") != std::string::npos); // it warns about a refused token
         agent.stop();
         serving.join();
     }
