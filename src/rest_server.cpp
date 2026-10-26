@@ -962,6 +962,9 @@ private:
         json document{{"openapi", "3.0.3"},
                       {"info", {{"title", api_title()}, {"version", version_.empty() ? std::string{"1"} : version_}}},
                       {"paths", paths}};
+        // Relative to where the document came from, so "Try it out" reaches this server behind a
+        // proxy that puts it under a path (https://api.example.com/man/openapi.json -> /man/...).
+        document["servers"] = json::array({{{"url", "."}}});
         if (!description_.empty()) document["info"]["description"] = description_;
         // Swagger UI shows the groups in this order.
         document["tags"] = json::array();
@@ -969,13 +972,14 @@ private:
             if (std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) == name; })) document["tags"].push_back({{"name", name}});
         if (jwt_) document["components"] = {{"securitySchemes", {{"bearer", {{"type", "http"}, {"scheme", "bearer"}, {"bearerFormat", "JWT"}}}}}};
 
-        // GET /docs: Swagger UI, from a CDN (pinned), on the document above.
+        // GET /docs: Swagger UI, from a CDN (pinned), on the document above, named relative to the
+        // page: /docs reads /openapi.json, and behind a proxy /man/docs reads /man/openapi.json.
         const std::string page = R"(<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>)" + api_title() + R"(</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"></head>
 <body><div id="swagger-ui"></div>
 <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
-<script>window.onload = () => SwaggerUIBundle({url: "/openapi.json", dom_id: "#swagger-ui"});</script>
+<script>window.onload = () => SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui"});</script>
 </body></html>
 )";
         const auto serve = [this, &taken](const std::string &path, std::string body, std::string type) {

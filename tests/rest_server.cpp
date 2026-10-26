@@ -348,6 +348,7 @@ int main() {
 
         const auto document = response_body(request(port, "GET", "/openapi.json"));
         CHECK_EQ(document["openapi"].get<std::string>(), std::string{"3.0.3"});
+        CHECK_EQ(document["servers"][0]["url"].get<std::string>(), std::string{"."});
         CHECK_EQ(document["info"]["title"].get<std::string>(), std::string{"Test API"});
         CHECK_EQ(document["paths"]["/health"]["get"]["summary"].get<std::string>(), std::string{"Whether it's up"});
         CHECK(document["paths"]["/protected"]["get"].contains("security"));
@@ -393,7 +394,7 @@ int main() {
         const auto page = request(port, "GET", "/docs");
         CHECK(page.starts_with("HTTP/1.1 200"));
         CHECK(page.find("SwaggerUIBundle") != std::string::npos);
-        CHECK(page.find("openapi.json") != std::string::npos);
+        CHECK(page.find("url: \"openapi.json\"") != std::string::npos); // relative: works behind a proxy's path too
         CHECK(request(port, "GET", "/swagger").starts_with("HTTP/1.1 404")); // /docs only
     }
 
