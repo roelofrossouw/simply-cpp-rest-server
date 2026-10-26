@@ -16,6 +16,7 @@
 #include <oatpp/web/server/HttpRouter.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -211,7 +212,37 @@ namespace {
         json payload;
     };
 
-    class jwt_service {
+    // What a bearer route checks the Authorization header against: JWT access tokens
+    // (configure_jwt), or one fixed token (bearer_token).
+    class bearer_check {
+    public:
+        virtual ~bearer_check() = default;
+        // The token's claims when "Bearer <token>" is good; nullopt otherwise.
+        [[nodiscard]] virtual std::optional<json> claims(std::string_view authorization) const = 0;
+    };
+
+    class fixed_token final : public bearer_check {
+    public:
+        explicit fixed_token(std::string token) : token_(std::move(token)) {
+            if (token_.empty()) throw std::invalid_argument("The bearer token must not be empty");
+        }
+
+        // Compared in constant time, so the answer's timing doesn't give the token away.
+        std::optional<json> claims(const std::string_view authorization) const override {
+            constexpr std::string_view prefix = "Bearer ";
+            if (authorization.size() != prefix.size() + token_.size() || !authorization.starts_with(prefix)) return std::nullopt;
+            unsigned char differs = 0;
+            for (std::size_t i = 0; i < token_.size(); ++i)
+                differs |= static_cast<unsigned char>(authorization[prefix.size() + i] ^ token_[i]);
+            if (differs != 0) return std::nullopt;
+            return json{{"sub", "token"}};
+        }
+
+    private:
+        std::string token_;
+    };
+
+    class jwt_service final : public bearer_check {
     public:
         explicit jwt_service(sc::jwt_configuration configuration) : configuration_(std::move(configuration)) {
             if (configuration_.secret.empty()) throw std::invalid_argument("JWT secret must not be empty");
@@ -258,6 +289,8 @@ namespace {
             if (!claims) return std::nullopt;
             return std::move(claims->payload);
         }
+
+        std::optional<json> claims(const std::string_view authorization) const override { return access_token_claims(authorization); }
 
     private:
         struct kept_refresh {
@@ -514,9 +547,9 @@ namespace {
     public:
         // route is what the usage figures call it: the registered path, "unmatched" for the
         // documentation's catch-all.
-        route_handler(sc::rest_handler handler, std::shared_ptr<const jwt_service> jwt, std::shared_ptr<usage_stats> usage,
+        route_handler(sc::rest_handler handler, std::shared_ptr<const bearer_check> bearer, std::shared_ptr<usage_stats> usage,
                       std::string route, std::shared_ptr<const std::vector<std::string>> proxies)
-            : handler_(std::move(handler)), jwt_(std::move(jwt)), usage_(std::move(usage)), route_(std::move(route)),
+            : handler_(std::move(handler)), bearer_(std::move(bearer)), usage_(std::move(usage)), route_(std::move(route)),
               proxies_(std::move(proxies)) {
         }
 
@@ -601,8 +634,8 @@ namespace {
                 rest_request.parameters[name.std_str()] = url_decode(value.std_str(), false);
             }
 
-            if (jwt_) {
-                auto claims = jwt_->access_token_claims(rest_request.authorization);
+            if (bearer_) {
+                auto claims = bearer_->claims(rest_request.authorization);
                 if (!claims) return error_response(401, "Unauthorized");
                 rest_request.claims = std::move(*claims);
             }
@@ -631,7 +664,7 @@ namespace {
         }
 
         sc::rest_handler handler_;
-        std::shared_ptr<const jwt_service> jwt_;
+        std::shared_ptr<const bearer_check> bearer_;
         std::shared_ptr<usage_stats> usage_;
         std::string route_;
         std::shared_ptr<const std::vector<std::string>> proxies_;
@@ -655,8 +688,10 @@ public:
     void configure_jwt(jwt_configuration configuration) {
         const auto lock = lock_before_run("JWT cannot be configured");
         if (jwt_) throw std::logic_error("JWT is already configured");
+        if (bearer_) throw std::logic_error("A bearer token is configured: JWT can't be too");
 
         jwt_ = std::make_shared<jwt_service>(std::move(configuration));
+        bearer_ = jwt_;
         routes_.push_back({"POST", "/create_token", [jwt = jwt_](const rest_request &request) {
                                return jwt->create_token(request);
                            },
@@ -667,9 +702,20 @@ public:
                            nullptr, "A new access token for a refresh token"});
     }
 
+    void bearer_token(std::string token) {
+        const auto lock = lock_before_run("The bearer token cannot be set");
+        if (bearer_) throw std::logic_error(jwt_ ? "JWT is configured: a bearer token can't be too" : "The bearer token is already set");
+        bearer_ = std::make_shared<fixed_token>(std::move(token));
+    }
+
     void documentation(const bool served) {
         const auto lock = lock_before_run("REST documentation cannot be changed");
         documented_ = served;
+    }
+
+    void documentation_needs_token(const bool hidden) {
+        const auto lock = lock_before_run("REST documentation cannot be changed");
+        documentation_needs_token_ = hidden;
     }
 
     void deprecate(const std::string &method, const std::string &path, std::string replacement) {
@@ -717,10 +763,10 @@ public:
         if (!handler) throw std::invalid_argument("REST route handler must not be empty");
 
         const auto lock = lock_before_run("REST routes cannot be added");
-        if (bearer_required && !jwt_) throw std::logic_error("JWT must be configured before adding bearer routes");
+        if (bearer_required && !bearer_) throw std::logic_error("JWT or a bearer token must be configured before adding bearer routes");
         for (const auto &each: parameters)
             if (each.name.empty()) throw std::invalid_argument("REST route parameters need a name");
-        routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? jwt_ : nullptr, std::move(description),
+        routes_.push_back({std::move(method), std::move(path), std::move(handler), bearer_required ? bearer_ : nullptr, std::move(description),
                            std::move(parameters), false, {}, group_});
     }
 
@@ -748,7 +794,7 @@ public:
                 const auto proxies = std::make_shared<const std::vector<std::string>>(proxies_);
                 for (const auto &route : routes_) {
                     router->route(route.method.c_str(), route.path.c_str(),
-                                  std::make_shared<route_handler>(route.handler, route.jwt, usage_,
+                                  std::make_shared<route_handler>(route.handler, route.bearer, usage_,
                                                                   route.path == "/*" ? std::string{"unmatched"} : route.path,
                                                                   proxies));
                 }
@@ -799,7 +845,7 @@ private:
         std::string method;
         std::string path;
         rest_handler handler;
-        std::shared_ptr<const jwt_service> jwt;
+        std::shared_ptr<const bearer_check> bearer; // null: open to all
         std::string description;
         std::vector<rest_parameter> parameters;
         bool deprecated = false;
@@ -860,7 +906,7 @@ private:
         const auto rank = [&](const entry &each) { return std::ranges::find(groups, group_of(each)) - groups.begin(); };
         std::vector<entry> listed;
         for (const auto &each: routes_)
-            listed.push_back({each.method, each.path, each.description, each.jwt != nullptr, each.parameters, each.deprecated, each.replacement,
+            listed.push_back({each.method, each.path, each.description, each.bearer != nullptr, each.parameters, each.deprecated, each.replacement,
                               each.group});
         const std::vector<entry> own{{"GET", "/", "This list of the API's routes", false},
                                      {"GET", "/openapi.json", "The API's description, for tools that read it", false},
@@ -871,132 +917,176 @@ private:
             if (rank(a) != rank(b)) return rank(a) < rank(b);
             return a.path != b.path ? a.path < b.path : a.method < b.method;
         });
-        // Only a list with more than one group gets headings.
-        const bool headed = std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) != "General"; });
+        // The list at / and the OpenAPI document for these routes; hidden: how many bearer routes
+        // were left out (documentation_needs_token without a valid token), said in both.
+        const auto build = [&](const std::vector<entry> &listed, const std::size_t hidden) {
+            const auto hidden_note = std::to_string(hidden) + (hidden == 1 ? " more route needs" : " more routes need") + " a bearer token.";
+            // Only a list with more than one group gets headings.
+            const bool headed = std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) != "General"; });
 
-        // GET /: one line a route, "GET  /status   the figures (needs a bearer token)".
-        std::size_t width = 0;
-        for (const auto &each: listed) width = std::max(width, each.path.size());
-        std::string help = api_title() + (version_.empty() ? "" : " " + version_) + "\n";
-        if (!description_.empty()) help += description_ + "\n";
-        help += "\n";
-        std::string heading;
-        for (const auto &each: listed) {
-            if (headed && group_of(each) != heading) {
-                heading = group_of(each);
-                help += (help.ends_with("\n\n") ? "" : "\n") + heading + "\n";
-            }
-            std::string line = each.method + std::string(each.method.size() < 5 ? 5 - each.method.size() : 1, ' ') + each.path;
-            line += std::string(width + 2 - each.path.size(), ' ') + each.description;
-            if (each.bearer) line += each.description.empty() ? "(needs a bearer token)" : " (needs a bearer token)";
-            if (each.deprecated) {
-                line += std::string{each.description.empty() && !each.bearer ? "" : " "} + "(deprecated" +
-                        (each.replacement.empty() ? std::string{} : ": use " + each.replacement) + ")";
-            }
-            help += line + "\n";
-            // Its parameters under it: "  ?limit=  how many (10; at most 1000)"
-            const auto in_path = path_parameters(each.path);
-            for (const auto &parameter: each.parameters) {
-                const bool path = std::ranges::find(in_path, parameter.name) != in_path.end();
-                std::string item = std::string(width + 7, ' ') + (path ? "{" + parameter.name + "}" : "?" + parameter.name + "=");
-                if (!parameter.description.empty()) item += "  " + parameter.description;
-                if (parameter.required && !path) item += " (required)";
-                help += item + "\n";
-            }
-        }
-        if (jwt_) help += "\nA token comes from POST /create_token; send it as \"Authorization: Bearer <token>\".\n";
-
-        // GET /openapi.json
-        json paths = json::object();
-        for (const auto &each: listed) {
-            const auto method = sc::lowercase(each.method);
-            json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
-            if (!each.description.empty()) operation["summary"] = each.description;
-            operation["tags"] = json::array({group_of(each)});
-            if (each.deprecated) {
-                operation["deprecated"] = true;
-                if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + ".";
-            }
-            const auto in_path = path_parameters(each.path);
-            const auto described = [&](const std::string &name) -> const rest_parameter * {
-                const auto found = std::ranges::find(each.parameters, name, &rest_parameter::name);
-                return found == each.parameters.end() ? nullptr : &*found;
-            };
-            const auto parameter_json = [](const std::string &name, const bool path, const rest_parameter *about) {
-                static constexpr std::array<const char *, 4> types{"string", "integer", "number", "boolean"};
-                json item{{"name", name}, {"in", path ? "path" : "query"}, {"required", path || (about && about->required)},
-                          {"schema", {{"type", types[static_cast<std::size_t>(about ? about->type : rest_parameter_type::string)]}}}};
-                if (about && !about->description.empty()) item["description"] = about->description;
-                if (about && !about->example.empty()) item["example"] = about->example;
-                return item;
-            };
-            for (const auto &name: in_path) operation["parameters"].push_back(parameter_json(name, true, described(name)));
-            for (const auto &parameter: each.parameters) {
-                if (std::ranges::find(in_path, parameter.name) == in_path.end()) {
-                    operation["parameters"].push_back(parameter_json(parameter.name, false, &parameter));
+            // GET /: one line a route, "GET  /status   the figures (needs a bearer token)".
+            std::size_t width = 0;
+            for (const auto &each: listed) width = std::max(width, each.path.size());
+            std::string help = api_title() + (version_.empty() ? "" : " " + version_) + "\n";
+            if (!description_.empty()) help += description_ + "\n";
+            help += "\n";
+            std::string heading;
+            for (const auto &each: listed) {
+                if (headed && group_of(each) != heading) {
+                    heading = group_of(each);
+                    help += (help.ends_with("\n\n") ? "" : "\n") + heading + "\n";
+                }
+                std::string line = each.method + std::string(each.method.size() < 5 ? 5 - each.method.size() : 1, ' ') + each.path;
+                line += std::string(width + 2 - each.path.size(), ' ') + each.description;
+                if (each.bearer) line += each.description.empty() ? "(needs a bearer token)" : " (needs a bearer token)";
+                if (each.deprecated) {
+                    line += std::string{each.description.empty() && !each.bearer ? "" : " "} + "(deprecated" +
+                            (each.replacement.empty() ? std::string{} : ": use " + each.replacement) + ")";
+                }
+                help += line + "\n";
+                // Its parameters under it: "  ?limit=  how many (10; at most 1000)"
+                const auto in_path = path_parameters(each.path);
+                for (const auto &parameter: each.parameters) {
+                    const bool path = std::ranges::find(in_path, parameter.name) != in_path.end();
+                    std::string item = std::string(width + 7, ' ') + (path ? "{" + parameter.name + "}" : "?" + parameter.name + "=");
+                    if (!parameter.description.empty()) item += "  " + parameter.description;
+                    if (parameter.required && !path) item += " (required)";
+                    help += item + "\n";
                 }
             }
-            if (each.bearer) {
-                operation["security"] = json::array({{{"bearer", json::array()}}});
-                operation["responses"]["401"] = {{"description", "No token, or one that isn't valid"}};
-            }
-            if (each.path == "/create_token" || each.path == "/refresh_token") {
-                const bool login = each.path == "/create_token";
-                json properties = json::object();
-                if (login) {
-                    properties["username"] = {{"type", "string"}};
-                    properties["password"] = {{"type", "string"}};
-                } else {
-                    properties["refresh_token"] = {{"type", "string"}};
+            if (jwt_) help += "\nA token comes from POST /create_token; send it as \"Authorization: Bearer <token>\".\n";
+            if (hidden > 0) help += "\n" + hidden_note + " Send it as \"Authorization: Bearer <token>\" to list them.\n";
+
+            // GET /openapi.json
+            json paths = json::object();
+            for (const auto &each: listed) {
+                const auto method = sc::lowercase(each.method);
+                json operation{{"responses", {{"200", {{"description", "OK"}}}}}};
+                if (!each.description.empty()) operation["summary"] = each.description;
+                operation["tags"] = json::array({group_of(each)});
+                if (each.deprecated) {
+                    operation["deprecated"] = true;
+                    if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + ".";
                 }
-                json schema = {{"type", "object"}, {"properties", properties}};
-                operation["requestBody"]["required"] = true;
-                operation["requestBody"]["content"]["application/json"]["schema"] = schema;
-                operation["responses"]["401"] = {{"description", login ? "The login was refused" : "The refresh token isn't valid"}};
-            } else if (each.method == "POST") {
-                operation["requestBody"]["required"] = false;
-                operation["requestBody"]["content"]["application/json"]["schema"] = {{"type", "object"}};
+                const auto in_path = path_parameters(each.path);
+                const auto described = [&](const std::string &name) -> const rest_parameter * {
+                    const auto found = std::ranges::find(each.parameters, name, &rest_parameter::name);
+                    return found == each.parameters.end() ? nullptr : &*found;
+                };
+                const auto parameter_json = [](const std::string &name, const bool path, const rest_parameter *about) {
+                    static constexpr std::array<const char *, 4> types{"string", "integer", "number", "boolean"};
+                    json item{{"name", name}, {"in", path ? "path" : "query"}, {"required", path || (about && about->required)},
+                              {"schema", {{"type", types[static_cast<std::size_t>(about ? about->type : rest_parameter_type::string)]}}}};
+                    if (about && !about->description.empty()) item["description"] = about->description;
+                    if (about && !about->example.empty()) item["example"] = about->example;
+                    return item;
+                };
+                for (const auto &name: in_path) operation["parameters"].push_back(parameter_json(name, true, described(name)));
+                for (const auto &parameter: each.parameters) {
+                    if (std::ranges::find(in_path, parameter.name) == in_path.end()) {
+                        operation["parameters"].push_back(parameter_json(parameter.name, false, &parameter));
+                    }
+                }
+                if (each.bearer) {
+                    operation["security"] = json::array({{{"bearer", json::array()}}});
+                    operation["responses"]["401"] = {{"description", "No token, or one that isn't valid"}};
+                }
+                if (each.path == "/create_token" || each.path == "/refresh_token") {
+                    const bool login = each.path == "/create_token";
+                    json properties = json::object();
+                    if (login) {
+                        properties["username"] = {{"type", "string"}};
+                        properties["password"] = {{"type", "string"}};
+                    } else {
+                        properties["refresh_token"] = {{"type", "string"}};
+                    }
+                    json schema = {{"type", "object"}, {"properties", properties}};
+                    operation["requestBody"]["required"] = true;
+                    operation["requestBody"]["content"]["application/json"]["schema"] = schema;
+                    operation["responses"]["401"] = {{"description", login ? "The login was refused" : "The refresh token isn't valid"}};
+                } else if (each.method == "POST") {
+                    operation["requestBody"]["required"] = false;
+                    operation["requestBody"]["content"]["application/json"]["schema"] = {{"type", "object"}};
+                }
+                paths[each.path][method] = operation;
             }
-            paths[each.path][method] = operation;
-        }
-        json document{{"openapi", "3.0.3"},
-                      {"info", {{"title", api_title()}, {"version", version_.empty() ? std::string{"1"} : version_}}},
-                      {"paths", paths}};
-        // Relative to where the document came from, so "Try it out" reaches this server behind a
-        // proxy that puts it under a path (https://api.example.com/man/openapi.json -> /man/...).
-        document["servers"] = json::array({{{"url", "."}}});
-        if (!description_.empty()) document["info"]["description"] = description_;
-        // Swagger UI shows the groups in this order.
-        document["tags"] = json::array();
-        for (const auto &name: groups)
-            if (std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) == name; })) document["tags"].push_back({{"name", name}});
-        if (jwt_) document["components"] = {{"securitySchemes", {{"bearer", {{"type", "http"}, {"scheme", "bearer"}, {"bearerFormat", "JWT"}}}}}};
+            json document{{"openapi", "3.0.3"},
+                          {"info", {{"title", api_title()}, {"version", version_.empty() ? std::string{"1"} : version_}}},
+                          {"paths", paths}};
+            // Relative to where the document came from, so "Try it out" reaches this server behind a
+            // proxy that puts it under a path (https://api.example.com/man/openapi.json -> /man/...).
+            document["servers"] = json::array({{{"url", "."}}});
+            if (!description_.empty()) document["info"]["description"] = description_;
+            if (hidden > 0)
+                document["info"]["description"] = (description_.empty() ? std::string{} : description_ + "\n\n") + "**" + hidden_note +
+                                                  "** Enter it in the box above to see them.";
+            // Swagger UI shows the groups in this order.
+            document["tags"] = json::array();
+            for (const auto &name: groups)
+                if (std::ranges::any_of(listed, [&](const entry &each) { return group_of(each) == name; })) document["tags"].push_back({{"name", name}});
+            if (bearer_) {
+                json scheme{{"type", "http"}, {"scheme", "bearer"}};
+                if (jwt_) scheme["bearerFormat"] = "JWT";
+                document["components"] = {{"securitySchemes", {{"bearer", scheme}}}};
+            }
+            return std::pair{help, document.dump(2)};
+        };
+        const auto all = build(listed, 0);
+        std::vector<entry> open;
+        std::ranges::copy_if(listed, std::back_inserter(open), [](const entry &each) { return !each.bearer; });
+        const auto hidden = documentation_needs_token_ ? listed.size() - open.size() : 0;
+        const auto public_ = hidden > 0 ? build(open, hidden) : all;
 
         // GET /docs: Swagger UI, from a CDN (pinned), on the document above, named relative to the
         // page: /docs reads /openapi.json, and behind a proxy /man/docs reads /man/openapi.json.
+        const std::string token_box = hidden == 0 ? std::string{} : R"(<form id="token" style="font:14px sans-serif;margin:16px 20px 0">
+<label>Bearer token <input id="bearer" type="password" size="44" autocomplete="off"></label>
+<button>Show all routes</button> <a href="#" id="forget">Forget it</a>
+<span style="color:#666">)" + std::to_string(hidden) + R"( routes need a token. It stays in this browser tab only.</span></form>
+)";
+        // The token from the box (kept for this tab, per page) goes with every request the page
+        // makes: openapi.json, so the hidden routes show, and Try it out.
+        const std::string script = hidden == 0 ? R"(window.onload = () => SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui"});)"
+                                               : R"(const key = "bearer:" + location.pathname;
+window.onload = () => {
+  const box = document.getElementById("bearer");
+  box.value = sessionStorage.getItem(key) || "";
+  document.getElementById("token").onsubmit = (e) => { e.preventDefault(); sessionStorage.setItem(key, box.value.trim()); location.reload(); };
+  document.getElementById("forget").onclick = (e) => { e.preventDefault(); sessionStorage.removeItem(key); location.reload(); };
+  SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui", requestInterceptor: (request) => {
+    const token = sessionStorage.getItem(key);
+    if (token && !request.headers.Authorization) request.headers.Authorization = "Bearer " + token;
+    return request;
+  }});
+};)";
         const std::string page = R"(<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>)" + api_title() + R"(</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css"></head>
-<body><div id="swagger-ui"></div>
+<body>)" + token_box + R"(<div id="swagger-ui"></div>
 <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
-<script>window.onload = () => SwaggerUIBundle({url: "openapi.json", dom_id: "#swagger-ui"});</script>
+<script>)" + script + R"(</script>
 </body></html>
 )";
-        const auto serve = [this, &taken](const std::string &path, std::string body, std::string type) {
-            if (taken("GET", path)) return;
-            routes_.push_back({"GET", path, [body = std::move(body), type = std::move(type)](const rest_request &) {
-                                   return rest_response{200, body, rest_content_type{type}};
-                               },
-                               nullptr, ""});
+        // The full lists for a request with a valid bearer token, else the open routes' only.
+        const auto pick = [bearer = bearer_, all, public_](const rest_request &request) -> const std::pair<std::string, std::string> & {
+            return bearer && bearer->claims(request.authorization) ? all : public_;
         };
-        serve("/", help, "text/plain; charset=utf-8");
-        serve("/openapi.json", document.dump(2), "application/json");
-        serve("/docs", page, "text/html; charset=utf-8");
+        const auto serve = [this, &taken](const std::string &path, rest_handler handler) {
+            if (taken("GET", path)) return;
+            routes_.push_back({"GET", path, std::move(handler), nullptr, ""});
+        };
+        serve("/", [pick](const rest_request &request) {
+            return rest_response{200, pick(request).first, rest_content_type{"text/plain; charset=utf-8"}};
+        });
+        serve("/openapi.json", [pick](const rest_request &request) {
+            return rest_response{200, pick(request).second, rest_content_type{"application/json"}};
+        });
+        serve("/docs", [page](const rest_request &) { return rest_response{200, page, rest_content_type{"text/html; charset=utf-8"}}; });
         // Any other path: 404, with the list, so a wrong path shows the right ones. Last, so the
         // routes above win.
         for (const char *method: {"GET", "POST"})
-            routes_.push_back({method, "/*", [help](const rest_request &) {
-                                   return rest_response{404, help, rest_content_type{"text/plain; charset=utf-8"}};
+            routes_.push_back({method, "/*", [pick](const rest_request &request) {
+                                   return rest_response{404, pick(request).first, rest_content_type{"text/plain; charset=utf-8"}};
                                },
                                nullptr, ""});
     }
@@ -1014,7 +1104,9 @@ private:
     std::vector<route> routes_;
     std::string group_; // group()
     std::shared_ptr<const jwt_service> jwt_;
+    std::shared_ptr<const bearer_check> bearer_; // jwt_, or a fixed token
     bool documented_ = true;
+    bool documentation_needs_token_ = false;
     bool documentation_added_ = false; // a second run() keeps the first's
     std::string title_, version_, description_;
     std::shared_ptr<oatpp::network::Server> server_;
@@ -1077,6 +1169,14 @@ void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::s
 
 void sc::rest_server::documentation(const bool served) {
     implementation_->documentation(served);
+}
+
+void sc::rest_server::documentation_needs_token(const bool hidden) {
+    implementation_->documentation_needs_token(hidden);
+}
+
+void sc::rest_server::bearer_token(std::string token) {
+    implementation_->bearer_token(std::move(token));
 }
 
 void sc::rest_server::log_level(const sc::log_level level) {

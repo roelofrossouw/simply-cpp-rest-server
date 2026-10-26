@@ -145,6 +145,10 @@ namespace sc {
         void bearer_get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void bearer_post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
         void configure_jwt(jwt_configuration configuration);
+        // Instead of JWT: the bearer routes want this one token, "Authorization: Bearer <token>"
+        // (compared in constant time); their handlers' claims are {"sub": "token"}. Not with
+        // configure_jwt(); before the bearer routes are added.
+        void bearer_token(std::string token);
 
         // The API's documentation, made from the routes, served unless turned off:
         //   GET /              a plain list: each route's method, path, whether it needs a token,
@@ -154,6 +158,12 @@ namespace sc {
         // Any other path answers 404 with that list. A route of the program's own at one of those
         // paths is kept instead. Before run().
         void documentation(bool served);
+        // true: the bearer routes are left out of that documentation unless the request brings a
+        // valid bearer token; without one, / and /openapi.json list the other routes and say how
+        // many more a token shows, and /docs has a box for the token (kept in the browser tab,
+        // sent with the page's requests). It hides them from view, nothing more: the routes
+        // still answer 401 without a token. Before run().
+        void documentation_needs_token(bool hidden);
         // What oatpp, underneath, writes to stderr: its errors and warnings by default
         // (sc::log_level::warning); info adds its info messages, debug its debug ones. For every
         // server in the process; may be called before or while one runs.

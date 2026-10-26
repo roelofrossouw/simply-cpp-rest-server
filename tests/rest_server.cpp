@@ -478,6 +478,65 @@ int main() {
         serving.join();
     }
 
+    SECTION("A fixed bearer token, and documentation that needs it");
+    {
+        const int token_port = available_port();
+        const std::string token(40, 'k');
+        sc::rest_server agent{{"127.0.0.1", token_port}};
+        agent.api_info("Agent", "1.0", "For the tests");
+        CHECK_THROWS_AS(agent.bearer_get("/early", [](const sc::rest_request &) { return sc::rest_response{}; }), std::logic_error);
+        CHECK_THROWS_AS(agent.bearer_token(""), std::invalid_argument);
+        agent.bearer_token(token);
+        CHECK_THROWS_AS(agent.bearer_token(token), std::logic_error); // once
+        CHECK_THROWS_AS(agent.configure_jwt({"secret", std::chrono::minutes{1}, std::chrono::hours{1},
+                                             [](std::string_view, std::string_view) { return std::string{"x"}; }}),
+                        std::logic_error); // not both
+        agent.documentation_needs_token(true);
+        agent.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; }, "Whether it's up");
+        agent.bearer_get("/containers", [](const sc::rest_request &request) {
+            return sc::rest_response{200, request.claims.value("sub", std::string{})};
+        }, "The containers");
+        agent.bearer_post("/jobs", [](const sc::rest_request &) { return sc::rest_response{200, "queued"}; }, "A job");
+        std::thread serving{[&agent] { agent.run(); }};
+        CHECK(agent.wait_until_running());
+        const auto bearer = "Bearer " + token;
+
+        CHECK(request(token_port, "GET", "/containers").starts_with("HTTP/1.1 401"));
+        CHECK(request(token_port, "GET", "/containers", {}, "Bearer " + std::string(40, 'x')).starts_with("HTTP/1.1 401"));
+        CHECK(request(token_port, "GET", "/containers", {}, "Bearer " + token + "k").starts_with("HTTP/1.1 401"));
+        CHECK(request(token_port, "GET", "/containers", {}, bearer).ends_with("token")); // claims {"sub": "token"}
+
+        // Without a valid token: the open routes, and how many more a token shows.
+        const auto open_list = request(token_port, "GET", "/");
+        CHECK(open_list.find("GET  /health") != std::string::npos);
+        CHECK(open_list.find("/containers") == std::string::npos);
+        CHECK(open_list.find("/jobs") == std::string::npos);
+        CHECK(open_list.find("2 more routes need a bearer token.") != std::string::npos);
+        CHECK(request(token_port, "GET", "/", {}, "Bearer wrong").find("/containers") == std::string::npos);
+        const auto open_document = response_body(request(token_port, "GET", "/openapi.json"));
+        CHECK(!open_document["paths"].contains("/containers"));
+        CHECK(open_document["paths"].contains("/health"));
+        CHECK(open_document["info"]["description"].get<std::string>().find("For the tests\n\n**2 more routes need a bearer token.**") == 0);
+        CHECK(!open_document["components"]["securitySchemes"]["bearer"].contains("bearerFormat")); // not a JWT
+        CHECK(request(token_port, "GET", "/nothing").find("/containers") == std::string::npos); // the 404's list too
+
+        // With it: everything, and no note.
+        const auto full_list = request(token_port, "GET", "/", {}, bearer);
+        CHECK(full_list.find("GET  /containers") != std::string::npos);
+        CHECK(full_list.find("POST /jobs") != std::string::npos);
+        CHECK(full_list.find("more routes need") == std::string::npos);
+        const auto full_document = response_body(request(token_port, "GET", "/openapi.json", {}, bearer));
+        CHECK(full_document["paths"].contains("/containers"));
+        CHECK_EQ(full_document["info"]["description"].get<std::string>(), std::string{"For the tests"});
+
+        // The page: a box for the token, sent with its requests.
+        const auto page = request(token_port, "GET", "/docs");
+        CHECK(page.find("id=\"bearer\"") != std::string::npos);
+        CHECK(page.find("requestInterceptor") != std::string::npos);
+        agent.stop();
+        serving.join();
+    }
+
     SECTION("wait_until_running() reports a server that cannot bind at once");
     {
         // 192.0.2.1 is a documentation address, never local, so binding to it fails.

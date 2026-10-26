@@ -304,7 +304,13 @@ server.deprecated("GET", "/tel/gps/{device}", "GET /gps/{device}");
 
 A route of the program's own at `/`, `/openapi.json` or `/docs` is kept instead of the
 documentation's; `server.documentation(false)` (before `run()`) leaves all of it out, the 404s
-then plain.
+then plain. `server.documentation_needs_token(true)` lists the bearer routes only for a request with
+a valid token: without one, the list and the OpenAPI document say how many more a token shows, and
+`/docs` has a box for it (since 1.8.0).
+
+The documentation works behind a proxy that puts the server under a path
+(`https://api.example.com/man/docs`): the page loads `openapi.json` relative to itself, and the
+document's server is `.`, so "Try it out" goes to the same place (since 1.7.2).
 
 ## Usage figures
 
@@ -402,3 +408,18 @@ server.bearer_get("/account", account);
 The integration test requires `SC_REST_SERVER_TEST_JWT_SECRET` in the
 build-server test environment. It uses only the test-local `test`/`test`
 credential validator.
+
+
+## A fixed bearer token
+
+For a service other programs call with a shared secret (an agent, say), `bearer_token()` takes the
+place of JWT (since 1.8.0): the `bearer_` routes want `Authorization: Bearer <token>`, compared in
+constant time, and their handlers' `claims` are `{"sub": "token"}`. Not together with
+`configure_jwt()`.
+
+```cpp
+server.bearer_token(settings.token);              // from a root-only configuration file
+server.documentation_needs_token(true);           // list the bearer routes only with the token
+server.get("/health", health, "Whether it's running (no token needed)");
+server.bearer_get("/containers", containers, "Every instance with its state");
+```
