@@ -8,9 +8,10 @@ option(SC_REST_SERVER_BUILD_TESTS "Build simply-cpp-rest-server tests" ${PROJECT
 get_sc_version()
 message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
-# The library needs 1.4.3; the demo also uses sc::getenv(), sc::datetime, sc::console::subheading,
-# and an sc::rest that can be called more than once (1.5.13).
+# The library needs 1.4.3; the demo also uses sc::getenv(), sc::datetime and sc::console::subheading.
 find_or_install_package(sc-core simply-cpp-dev simply-cpp 1.20.0)
+# The demo calls its own server with sc::rest (sc-core's until 2.0.0).
+find_or_install_package(sc-http simply-cpp-http-dev simply-cpp-http 1.0.3)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
 find_or_install_package(OpenSSL libssl-dev openssl)
@@ -38,8 +39,9 @@ if (SC_REST_SERVER_BUILD_TESTS)
 endif ()
 
 add_sc_example(sc-rest-server-demo)
+target_link_libraries(sc-rest-server-demo PRIVATE sc::sc-http-shared)
 
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
 package_sc_module(
-        DEPENDS simply-cpp-oatpp
+        DEPENDS simply-cpp-oatpp "simply-cpp-http (>= 1.0.3~)"
         DEV_DEPENDS "simply-cpp-dev (>= 1.20.0~)" simply-cpp-oatpp-dev nlohmann-json3-dev libssl-dev)

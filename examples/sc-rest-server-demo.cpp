@@ -15,6 +15,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <rest.h>
 #include <sc.h>
 
 #include <rest_server.h>
