@@ -4,8 +4,8 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
-#include <ip_endpoint.h>
-#include <log_level.h>
+#include <sc/core/ip_endpoint.h>
+#include <sc/core/log_level.h>
 #include <map>
 #include <memory>
 #include <nlohmann/json.hpp>

@@ -15,10 +15,10 @@
 
 #include <nlohmann/json.hpp>
 
-#include <rest.h>
-#include <sc.h>
+#include <sc/http/rest.h>
+#include <sc/core/sc.h>
 
-#include <rest_server.h>
+#include <sc/rest-server/rest_server.h>
 
 namespace {
     // A new signing secret each run: the demo verifies only its own tokens. A real service

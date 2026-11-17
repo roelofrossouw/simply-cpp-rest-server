@@ -1,4 +1,4 @@
-#include <rest_server.h>
+#include <sc/rest-server/rest_server.h>
 #include <sc_test.h>
 
 #include <nlohmann/json.hpp>

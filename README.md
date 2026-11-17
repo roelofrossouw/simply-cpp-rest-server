@@ -8,7 +8,7 @@ types in its public API.
 **Documentation:** the [simply-cpp wiki](https://github.com/roelofrossouw/simply-cpp/wiki) has a [REST server guide](https://github.com/roelofrossouw/simply-cpp/wiki/REST-Server) and the [sc-rest-server reference](https://github.com/roelofrossouw/simply-cpp/wiki/Reference-sc-rest-server), plus [getting started](https://github.com/roelofrossouw/simply-cpp/wiki/Getting-Started) for the whole suite.
 
 ```cpp
-#include <rest_server.h>
+#include <sc/rest-server/rest_server.h>
 
 sc::rest_response health(const sc::rest_request &) {
     return {200, "ready"};

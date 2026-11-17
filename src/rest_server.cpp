@@ -1,6 +1,6 @@
-#include "rest_server.h"
+#include <sc/rest-server/rest_server.h>
 
-#include <core.h>
+#include <sc/core/core.h>
 
 #include <nlohmann/json.hpp>
 #include <openssl/crypto.h>
