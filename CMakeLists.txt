@@ -42,6 +42,9 @@ add_sc_example(sc-rest-server-demo)
 target_link_libraries(sc-rest-server-demo PRIVATE sc::sc-http-shared)
 
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
+# Only the demo (sc-rest-server-demo calls its own server with sc::rest) needs sc-http, so it is a
+# Recommends: the library itself never loads it.
+set(CPACK_DEBIAN_RUNTIME_PACKAGE_RECOMMENDS "simply-cpp-http (>= 1.2.0~)")
 package_sc_module(
-        DEPENDS simply-cpp-oatpp "simply-cpp-http (>= 1.2.0~)"
+        DEPENDS simply-cpp-oatpp
         DEV_DEPENDS "simply-cpp-dev (>= 1.20.0~)" simply-cpp-oatpp-dev nlohmann-json3-dev libssl-dev)
