@@ -250,13 +250,13 @@ int main() {
     {
         const std::string raw = "{ \"event\" :\t\"gps\",\r\n  \"n\":1.50 }  \n";
         const auto seen = response_body(request(port, "POST", "/inspect", raw, "Bearer abc", "application/json",
-                                                "X-2WC-Signature: sha256=00ff\r\nX-2WC-Event: gps\r\n"
+                                                "X-Example-Signature: sha256=00ff\r\nX-Example-Event: gps\r\n"
                                                 "X-Tag: a\r\nx-tag: b\r\n"));
         CHECK_EQ(seen["body"].get<std::string>(), raw);
         const auto &headers = seen["headers"];
-        CHECK_EQ(headers["x-2wc-signature"].get<std::string>(), std::string{"sha256=00ff"});
-        CHECK_EQ(headers["x-2wc-event"].get<std::string>(), std::string{"gps"});
-        CHECK(!headers.contains("X-2WC-Event"));
+        CHECK_EQ(headers["x-example-signature"].get<std::string>(), std::string{"sha256=00ff"});
+        CHECK_EQ(headers["x-example-event"].get<std::string>(), std::string{"gps"});
+        CHECK(!headers.contains("X-Example-Event"));
         // Both values, in whichever order oatpp keeps them (it differs between macOS and Linux).
         const auto tags = headers["x-tag"].get<std::string>();
         CHECK(tags == "a, b" || tags == "b, a");

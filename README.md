@@ -31,8 +31,8 @@ the query string), `body`, `authorization`, `remote_address` and `content_type`,
 plus three parsed forms:
 
 - `parameters`: the values of the route's `{name}` segments, `%XX` decoded
-  (since 1.3.0). A route `"/vms/locus/{device}"` matches `/vms/locus/100000002623`
-  and gets `{"device": "100000002623"}`; each `{name}` takes one whole segment,
+  (since 1.3.0). A route `"/orders/{order}"` matches `/orders/100002623`
+  and gets `{"order": "100002623"}`; each `{name}` takes one whole segment,
   and routes are tried in the order they were added. The OpenAPI document lists
   them as path parameters.
 - `query`: the query string as a JSON object of decoded strings; a name given
@@ -42,7 +42,7 @@ plus three parsed forms:
   It is `null` otherwise, or when the body doesn't parse.
 
 `headers` holds every request header by its lowercased name
-(`request.headers.at("x-2wc-signature")`); a header sent more than once has its
+(`request.headers.at("x-example-signature")`); a header sent more than once has its
 values joined with `", "` (in no set order). `body` is the raw body, byte for byte, so a signed
 webhook can be checked against it.
 
@@ -268,8 +268,8 @@ a query parameter. Swagger UI then shows a field for each, filled with the
 example:
 
 ```cpp
-server.get("/vms/loci/{device}", loci, "A device's positions, newest first", {
-    {.name = "device", .description = "the VMS device", .example = "100000002955"},
+server.get("/orders/{order}/events", events, "An order's events, newest first", {
+    {.name = "order", .description = "the order number", .example = "100002955"},
     {.name = "before", .description = "up to this time (default now)", .example = "202610011500"},
     {.name = "limit", .description = "how many (10; at most 1000)", .type = sc::rest_parameter_type::integer, .example = "10"},
 });
@@ -320,7 +320,7 @@ figures at `GET /usage`, in Prometheus' text format, or as JSON with
 
 | Metric | |
 |---|---|
-| `sc_rest_requests_total{method, route, status}` | requests answered; `route` is the registered pattern (`/vms/locus/{device}`), `unmatched` for a path no route has |
+| `sc_rest_requests_total{method, route, status}` | requests answered; `route` is the registered pattern (`/orders/{order}`), `unmatched` for a path no route has |
 | `sc_rest_request_duration_seconds{method, route}` | a histogram of how long they took (1 ms to 10 s), so Grafana can show a p95 |
 | `sc_rest_response_bytes_total{method, route}` | the response bytes sent |
 | `sc_rest_client_requests_total{client}`, `sc_rest_client_errors_total{client}` | requests, and those answered 4xx or 5xx, by client address: the first 1000 addresses, the rest as `other` |

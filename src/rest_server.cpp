@@ -54,7 +54,7 @@ namespace {
         return result;
     }
 
-    // The {name} segments of a route's path: {"device"} for "/vms/locus/{device}".
+    // The {name} segments of a route's path: {"order"} for "/orders/{order}".
     std::vector<std::string> path_parameters(const std::string_view path) {
         std::vector<std::string> names;
         for (std::size_t open = path.find('{'); open != std::string_view::npos; open = path.find('{', open + 1)) {
@@ -382,7 +382,7 @@ namespace {
     };
 
     // The usage figures: requests by route and status, how long they took (a histogram), what
-    // they sent, and who asked. Routes are the registered patterns ("/vms/locus/{device}"), so the
+    // they sent, and who asked. Routes are the registered patterns ("/orders/{order}"), so the
     // figures stay few whatever the paths; clients are counted by address, the first
     // max_clients of them, the rest together as "other".
     class usage_stats {
