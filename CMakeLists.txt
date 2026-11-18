@@ -10,8 +10,8 @@ message(STATUS "SimplyCPP ${SC_MODULE} Version: ${SC_VERSION}")
 
 # The library needs 1.4.3; the demo also uses sc::getenv(), sc::datetime and sc::console::subheading.
 find_or_install_package(sc-core simply-cpp-dev simply-cpp 3.0.0)
-# The demo calls its own server with sc::rest (sc-core's until 2.0.0).
-find_or_install_package(sc-http simply-cpp-http-dev simply-cpp-http 2.0.0)
+# The demo calls its own server with sc::http::client (sc-http).
+find_or_install_package(sc-http simply-cpp-http-dev simply-cpp-http 3.0.0)
 find_or_install_package(oatpp simply-cpp-oatpp-dev oatpp)
 find_or_install_package(nlohmann_json nlohmann-json3-dev nlohmann_json)
 find_or_install_package(OpenSSL libssl-dev openssl)
@@ -42,9 +42,9 @@ add_sc_example(sc-rest-server-demo)
 target_link_libraries(sc-rest-server-demo PRIVATE sc::sc-http-shared)
 
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}")
-# Only the demo (sc-rest-server-demo calls its own server with sc::rest) needs sc-http, so it is a
+# Only the demo (sc-rest-server-demo calls its own server with sc::http::client) needs sc-http, so it is a
 # Recommends: the library itself never loads it.
-set(CPACK_DEBIAN_RUNTIME_PACKAGE_RECOMMENDS "simply-cpp-http (>= 2.0.0~)")
+set(CPACK_DEBIAN_RUNTIME_PACKAGE_RECOMMENDS "simply-cpp-http (>= 3.0.0~)")
 package_sc_module(
         DEPENDS simply-cpp-oatpp
         DEV_DEPENDS "simply-cpp-dev (>= 3.0.0~)" simply-cpp-oatpp-dev nlohmann-json3-dev libssl-dev)

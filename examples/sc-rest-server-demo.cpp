@@ -1,5 +1,5 @@
 // A REST server and its client in one program: the server runs in a background thread, and the
-// main thread calls it with sc::rest - a GET, a JSON POST, and a route protected with JWT bearer
+// main thread calls it with sc::http::client - a GET, a JSON POST, and a route protected with JWT bearer
 // authentication: without a token, a refused login, a login, and with the token it gave. Each
 // request is shown with the response it got. Needs no other server.
 // Listens on SC_REST_SERVER_DEMO_SERVER (one IPv4 host[:port]); unset or empty means
@@ -15,7 +15,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <sc/http/rest.h>
+#include <sc/http/client.h>
 #include <sc/core/sc.h>
 
 #include <sc/rest-server/rest_server.h>
@@ -124,24 +124,24 @@ int main() {
         if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
         sc::console::heading("What the server has: its routes, made from them");
-        sc::rest routes{base_url + "/"};
+        sc::http::client routes{base_url + "/"};
         sc::console::show_text("GET /", routes.get());
 
         sc::console::heading("Plain text");
-        sc::rest hello{base_url + "/hello"};
+        sc::http::client hello{base_url + "/hello"};
         sc::console::show_text("GET /hello", hello.get());
 
         sc::console::heading("JSON in, JSON out");
-        sc::rest echo{base_url + "/echo?one=abc&two=5"};
+        sc::http::client echo{base_url + "/echo?one=abc&two=5"};
         sc::console::show_text(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
 
         sc::console::heading("A route protected with a JWT bearer token");
         sc::console::subheading("Without a token");
-        sc::rest account{base_url + "/account"};
+        sc::http::client account{base_url + "/account"};
         sc::console::show_text("GET /account", account.get());
 
         sc::console::subheading("Logging in with the wrong password");
-        sc::rest login{base_url + "/create_token"};
+        sc::http::client login{base_url + "/create_token"};
         sc::console::show_text(R"(POST /create_token  {"username":"demo","password":"wrong"})",
                                login.post(R"({"username":"demo","password":"wrong"})"));
 

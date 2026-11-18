@@ -105,7 +105,7 @@ OpenAPI extension is intentionally not part of this initial API.
 ## Demo
 
 `sc-rest-server-demo` runs a server and its client in one program: the server in
-a background thread, and the main thread calling it with `sc::rest` - a GET, a
+a background thread, and the main thread calling it with `sc::http::client` - a GET, a
 JSON POST, and a route protected with JWT bearer authentication, first without a
 token and then with one from `POST /create_token`. Each request is shown with the
 response it got. It is installed with the runtime package
@@ -200,24 +200,24 @@ int main() {
         if (!server.wait_until_running()) throw std::runtime_error{"server did not start on " + base_url};
 
         sc::console::heading("What the server has: its routes, made from them");
-        sc::rest routes{base_url + "/"};
+        sc::http::client routes{base_url + "/"};
         sc::console::show_text("GET /", routes.get());
 
         sc::console::heading("Plain text");
-        sc::rest hello{base_url + "/hello"};
+        sc::http::client hello{base_url + "/hello"};
         sc::console::show_text("GET /hello", hello.get());
 
         sc::console::heading("JSON in, JSON out");
-        sc::rest echo{base_url + "/echo?one=abc&two=5"};
+        sc::http::client echo{base_url + "/echo?one=abc&two=5"};
         sc::console::show_text(R"(POST /echo?one=abc&two=5  {"name":"simply-cpp"})", echo.post(R"({"name":"simply-cpp"})"));
 
         sc::console::heading("A route protected with a JWT bearer token");
         sc::console::subheading("Without a token");
-        sc::rest account{base_url + "/account"};
+        sc::http::client account{base_url + "/account"};
         sc::console::show_text("GET /account", account.get());
 
         sc::console::subheading("Logging in with the wrong password");
-        sc::rest login{base_url + "/create_token"};
+        sc::http::client login{base_url + "/create_token"};
         sc::console::show_text(R"(POST /create_token  {"username":"demo","password":"wrong"})",
                                login.post(R"({"username":"demo","password":"wrong"})"));
 
