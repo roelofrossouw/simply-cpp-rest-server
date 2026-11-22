@@ -606,8 +606,11 @@ namespace {
         }
 
         sc::rest_response answer(IncomingRequest &request, const std::string &client, const std::string &peer) const {
+            // With a length or chunked (as Apache's mod_proxy streams a large body): read it all, before
+            // anything answers, so the handler sees the whole body and the client isn't cut off mid-upload.
             oatpp::String body;
-            if (request.getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH)) {
+            if (request.getHeader(oatpp::web::protocol::http::Header::CONTENT_LENGTH) ||
+                request.getHeader(oatpp::web::protocol::http::Header::TRANSFER_ENCODING)) {
                 body = request.readBodyToString();
             }
             const auto target = request.getStartingLine().path.std_str();

@@ -5,6 +5,7 @@
 
 #include <arpa/inet.h>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <netinet/in.h>
 #include <stdexcept>
@@ -82,6 +83,33 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         throw std::runtime_error("REST server did not start listening");
+    }
+
+    // A request sent exactly as given (for framing request() doesn't do, e.g. chunked).
+    std::string raw_request(const int port, const std::string &text) {
+        const int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (socket_fd < 0) throw std::runtime_error("Unable to create test socket");
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_port = htons(static_cast<std::uint16_t>(port));
+        inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
+        if (connect(socket_fd, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0) {
+            close(socket_fd);
+            throw std::runtime_error("Unable to connect");
+        }
+        std::size_t sent = 0;
+        while (sent < text.size()) {
+            const auto bytes = send(socket_fd, text.data() + sent, text.size() - sent, 0);
+            if (bytes <= 0) break; // the server may close early; read what it answered
+            sent += static_cast<std::size_t>(bytes);
+        }
+        std::string response;
+        char buffer[4096];
+        for (ssize_t bytes = recv(socket_fd, buffer, sizeof(buffer), 0); bytes > 0; bytes = recv(socket_fd, buffer, sizeof(buffer), 0)) {
+            response.append(buffer, static_cast<std::size_t>(bytes));
+        }
+        close(socket_fd);
+        return response;
     }
 
     json response_body(const std::string &response) {
@@ -264,6 +292,27 @@ int main() {
         CHECK_EQ(headers["content-type"].get<std::string>(), std::string{"application/json"});
         CHECK_EQ(headers["content-length"].get<std::string>(), std::to_string(raw.size()));
         CHECK_EQ(headers["host"].get<std::string>(), std::string{"localhost"});
+    }
+
+    SECTION("A chunked body (Transfer-Encoding: chunked, no Content-Length), as a proxy sends a large one");
+    {
+        // About 1 MB in 4 KB chunks: Apache's mod_proxy streams a body over 16 KB chunked.
+        std::string raw;
+        while (raw.size() < 1024 * 1024) raw += "{\"id\":" + std::to_string(raw.size()) + ",\"text\":\"0123456789abcdef\"},";
+        std::string chunked;
+        for (std::size_t at = 0; at < raw.size(); at += 4096) {
+            const auto piece = raw.substr(at, 4096);
+            char size[16];
+            std::snprintf(size, sizeof size, "%zx", piece.size());
+            chunked += std::string{size} + "\r\n" + piece + "\r\n";
+        }
+        chunked += "0\r\n\r\n";
+        const auto response = raw_request(port, "POST /inspect HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                                                "Content-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked);
+        CHECK(response.starts_with("HTTP/1.1 200"));
+        const auto seen = response_body(response);
+        CHECK_EQ(seen["body"].get<std::string>().size(), raw.size());
+        CHECK(seen["body"].get<std::string>() == raw);
     }
 
     SECTION("JWT token creation");
