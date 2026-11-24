@@ -8,25 +8,25 @@ types in its public API.
 **Documentation:** the [simply-cpp wiki](https://github.com/roelofrossouw/simply-cpp/wiki) has a [REST server guide](https://github.com/roelofrossouw/simply-cpp/wiki/REST-Server) and the [sc-rest-server reference](https://github.com/roelofrossouw/simply-cpp/wiki/Reference-sc-rest-server), plus [getting started](https://github.com/roelofrossouw/simply-cpp/wiki/Getting-Started) for the whole suite.
 
 ```cpp
-#include <sc/rest-server/rest_server.h>
+#include <sc/rest-server/server.h>
 
-sc::rest_response health(const sc::rest_request &) {
+sc::rest_server::response health(const sc::rest_server::request &) {
     return {200, "ready"};
 }
 
-sc::rest_response echo(const sc::rest_request &request) {
-    return {201, request.body, sc::content_type::json};
+sc::rest_server::response echo(const sc::rest_server::request &request) {
+    return {201, request.body, sc::rest_server::content_type::json};
 }
 
 int main() {
-    sc::rest_server server{{"127.0.0.1", 8080}};
+    sc::rest_server::server server{{"127.0.0.1", 8080}};
     server.get("/health", health);
     server.post("/echo", echo);
     server.run();
 }
 ```
 
-A handler gets the request as a `sc::rest_request`: `method`, `path` (without
+A handler gets the request as a `sc::rest_server::request`: `method`, `path` (without
 the query string), `body`, `authorization`, `remote_address` and `content_type`,
 plus three parsed forms:
 
@@ -48,35 +48,35 @@ webhook can be checked against it.
 
 ```cpp
 // POST /orders?dry_run=1  {"item": "book", "count": 2}
-sc::rest_response order(const sc::rest_request &request) {
+sc::rest_server::response order(const sc::rest_server::request &request) {
     const bool dry_run = request.query.value("dry_run", "0") == "1";
-    if (!request.json.is_object()) return {400, R"({"error":"JSON object expected"})", sc::content_type::json};
+    if (!request.json.is_object()) return {400, R"({"error":"JSON object expected"})", sc::rest_server::content_type::json};
     const auto item = request.json.value("item", "");
     const int count = request.json.value("count", 1);
     // ...
-    return {dry_run ? 200 : 201, R"({"ok":true})", sc::content_type::json};
+    return {dry_run ? 200 : 201, R"({"ok":true})", sc::rest_server::content_type::json};
 }
 
 server.post("/orders", order);
 
 // GET /tel/location/-27.96/28.97
-server.get("/tel/location/{lat}/{lng}", [](const sc::rest_request &request) {
+server.get("/tel/location/{lat}/{lng}", [](const sc::rest_server::request &request) {
     const auto lat = std::stod(request.parameters["lat"].get<std::string>());
     // ...
-    return sc::rest_response{200, R"({"ok":true})", sc::content_type::json};
+    return sc::rest_server::response{200, R"({"ok":true})", sc::rest_server::content_type::json};
 });
 ```
 
 A response's content type is `text` (`text/plain; charset=utf-8`) unless the
-handler says otherwise, with a `sc::content_type` or any `Content-Type` value as a
+handler says otherwise, with a `sc::rest_server::content_type` or any `Content-Type` value as a
 string. The body is bytes, so a binary body may contain zero bytes:
 
 ```cpp
-sc::rest_response report(const sc::rest_request &) {
-    return {200, "name,kind\nsimply-cpp,library\n", sc::content_type::csv};
+sc::rest_server::response report(const sc::rest_server::request &) {
+    return {200, "name,kind\nsimply-cpp,library\n", sc::rest_server::content_type::csv};
 }
 
-sc::rest_response logo(const sc::rest_request &) {
+sc::rest_server::response logo(const sc::rest_server::request &) {
     static const auto svg = sc::file_get_contents("logo.svg"); // read once
     return {200, svg, "image/svg+xml"};
 }
@@ -85,14 +85,14 @@ server.get("/report.csv", report);
 server.get("/logo.svg", logo);
 ```
 
-| `sc::content_type` | `Content-Type` |
+| `sc::rest_server::content_type` | `Content-Type` |
 |---|---|
 | `text` (default) | `text/plain; charset=utf-8` |
 | `json` | `application/json` |
 | `csv` | `text/csv; charset=utf-8` |
 | `binary` | `application/octet-stream` |
 
-`sc::content_type_header(type)` gives the header value, and
+`sc::rest_server::content_type_header(type)` gives the header value, and
 `sc::content_type_headers` holds them all, in the enum's order.
 
 Call `stop()` from another thread to end `run()`. When `run()` is on a
@@ -127,19 +127,19 @@ it at configure time, so it always matches code that compiles:
 ```cpp
 namespace {
     // GET /hello: plain text.
-    sc::rest_response hello(const sc::rest_request &) {
+    sc::rest_server::response hello(const sc::rest_server::request &) {
         return {200, "Hello World!"};
     }
 
     // POST /echo: the request back as JSON. request.query is the query string as JSON, and
     // request.json a JSON body as JSON.
-    sc::rest_response echo(const sc::rest_request &request) {
+    sc::rest_server::response echo(const sc::rest_server::request &request) {
         const nlohmann::json response{
             {"Path", request.path},
             {"Query", request.query},
             {"Post", request.json}
         };
-        return {200, response.dump(2), sc::content_type::json};
+        return {200, response.dump(2), sc::rest_server::content_type::json};
     }
 
     // POST /create_token's check: the "sub" for the tokens (a user id, say), or "" to refuse the
@@ -151,18 +151,18 @@ namespace {
     // GET /account, with a bearer token. request.claims is the verified token's payload: "sub"
     // is who logged in, "source" the IP address the token was issued to, "exp" when it expires
     // (Unix time).
-    sc::rest_response account(const sc::rest_request &request) {
+    sc::rest_server::response account(const sc::rest_server::request &request) {
         const auto expires = sc::datetime::from_unix(request.claims.at("exp").get<long long>());
         const nlohmann::json details{
             {"account", request.claims.at("sub")},
             {"source", request.claims.at("source")},
             {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}
         };
-        return {200, details.dump(), sc::content_type::json};
+        return {200, details.dump(), sc::rest_server::content_type::json};
     }
 
     // Every route, and the JWT bearer authentication, on the server (before it runs).
-    void register_routes(sc::rest_server &server) {
+    void register_routes(sc::rest_server::server &server) {
         // A description each, for the documentation the server makes of its routes (GET /,
         // /openapi.json, /docs).
         server.api_info("sc-rest-server demo", "1", "A server and its client in one program");
@@ -175,7 +175,7 @@ namespace {
     }
 
     // Serves until stop(). run() blocks, so this runs on a thread of its own.
-    void serve(sc::rest_server &server) {
+    void serve(sc::rest_server::server &server) {
         try {
             server.run();
         } catch (const std::exception &error) {
@@ -192,7 +192,7 @@ int main() {
         sc::console::output() << "The server listens on " << base_url << "  (SC_REST_SERVER_DEMO_SERVER)\n";
 
         sc::timer sw;
-        sc::rest_server server{endpoint};
+        sc::rest_server::server server{endpoint};
         register_routes(server);
 
         std::thread server_thread{serve, std::ref(server)};
@@ -271,7 +271,7 @@ example:
 server.get("/orders/{order}/events", events, "An order's events, newest first", {
     {.name = "order", .description = "the order number", .example = "100002955"},
     {.name = "before", .description = "up to this time (default now)", .example = "202610011500"},
-    {.name = "limit", .description = "how many (10; at most 1000)", .type = sc::rest_parameter_type::integer, .example = "10"},
+    {.name = "limit", .description = "how many (10; at most 1000)", .type = sc::rest_server::parameter_type::integer, .example = "10"},
 });
 ```
 
@@ -360,7 +360,7 @@ Apache's `ProxyPass` sends the header by default; nginx needs
 oatpp, underneath, writes its errors and warnings to stderr; since 1.3.2 not its
 info and debug messages, which it shows by default (such as `assignThreadToCpu
 ... error code - 22` in a container that doesn't let it pin threads).
-`sc::rest_server::log_level(sc::log_level::debug)` brings them back, for every
+`sc::rest_server::server::log_level(sc::log_level::debug)` brings them back, for every
 server in the process; it can be called before or while one runs.
 
 ## JWT bearer authentication
@@ -397,7 +397,7 @@ A refreshed access token gets the refreshing client's address; the refresh
 token keeps the one it was first issued to. It is `null` for routes that aren't protected.
 
 ```cpp
-sc::rest_response account(const sc::rest_request &request) {
+sc::rest_server::response account(const sc::rest_server::request &request) {
     const auto username = request.claims.at("sub").get<std::string>();
     return {200, "Hello " + username};
 }

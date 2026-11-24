@@ -1,4 +1,4 @@
-#include <sc/rest-server/rest_server.h>
+#include <sc/rest-server/server.h>
 
 #include <sc/core/core.h>
 
@@ -200,8 +200,8 @@ namespace {
         return value ? std::string(value->c_str(), value->size()) : std::string{};
     }
 
-    sc::rest_response error_response(const int status, const std::string_view message) {
-        return {status, json{{"error", message}}.dump(), sc::content_type::json};
+    sc::rest_server::response error_response(const int status, const std::string_view message) {
+        return {status, json{{"error", message}}.dump(), sc::rest_server::content_type::json};
     }
 
     struct jwt_claims {
@@ -244,7 +244,7 @@ namespace {
 
     class jwt_service final : public bearer_check {
     public:
-        explicit jwt_service(sc::jwt_configuration configuration) : configuration_(std::move(configuration)) {
+        explicit jwt_service(sc::rest_server::jwt_configuration configuration) : configuration_(std::move(configuration)) {
             if (configuration_.secret.empty()) throw std::invalid_argument("JWT secret must not be empty");
             if (configuration_.access_token_lifetime <= std::chrono::seconds::zero()) {
                 throw std::invalid_argument("JWT access token lifetime must be positive");
@@ -257,7 +257,7 @@ namespace {
             }
         }
 
-        sc::rest_response create_token(const sc::rest_request &request) const {
+        sc::rest_server::response create_token(const sc::rest_server::request &request) const {
             try {
                 const auto credentials = json::parse(request.body);
                 const auto username = credentials.at("username").get<std::string>();
@@ -270,7 +270,7 @@ namespace {
             }
         }
 
-        sc::rest_response refresh_token(const sc::rest_request &request) const {
+        sc::rest_server::response refresh_token(const sc::rest_server::request &request) const {
             try {
                 const auto refresh_token = json::parse(request.body).at("refresh_token").get<std::string>();
                 const auto claims = verify(refresh_token, "refresh");
@@ -345,7 +345,7 @@ namespace {
 
         // source is the client's IP address. A refresh reuses the refresh token, so that keeps the
         // address it was first issued to, while the new access token gets the refreshing client's.
-        sc::rest_response token_response(const std::string &subject, const std::string &source, const unix_seconds issued_at,
+        sc::rest_server::response token_response(const std::string &subject, const std::string &source, const unix_seconds issued_at,
                                          const std::optional<kept_refresh> &kept) const {
             const auto access_expires_at = issued_at + configuration_.access_token_lifetime.count();
             const auto access_token = sign(json{
@@ -375,10 +375,10 @@ namespace {
                         {"refresh_expires_in", refresh_expires - issued_at},
                     }
                         .dump(),
-                    sc::content_type::json};
+                    sc::rest_server::content_type::json};
         }
 
-        sc::jwt_configuration configuration_;
+        sc::rest_server::jwt_configuration configuration_;
     };
 
     // The usage figures: requests by route and status, how long they took (a histogram), what
@@ -547,7 +547,7 @@ namespace {
     public:
         // route is what the usage figures call it: the registered path, "unmatched" for the
         // documentation's catch-all.
-        route_handler(sc::rest_handler handler, std::shared_ptr<const bearer_check> bearer, std::shared_ptr<usage_stats> usage,
+        route_handler(sc::rest_server::handler handler, std::shared_ptr<const bearer_check> bearer, std::shared_ptr<usage_stats> usage,
                       std::string route, std::shared_ptr<const std::vector<std::string>> proxies)
             : handler_(std::move(handler)), bearer_(std::move(bearer)), usage_(std::move(usage)), route_(std::move(route)),
               proxies_(std::move(proxies)) {
@@ -605,7 +605,7 @@ namespace {
             return client;
         }
 
-        sc::rest_response answer(IncomingRequest &request, const std::string &client, const std::string &peer) const {
+        sc::rest_server::response answer(IncomingRequest &request, const std::string &client, const std::string &peer) const {
             // With a length or chunked (as Apache's mod_proxy streams a large body): read it all, before
             // anything answers, so the handler sees the whole body and the client isn't cut off mid-upload.
             oatpp::String body;
@@ -615,34 +615,34 @@ namespace {
             }
             const auto target = request.getStartingLine().path.std_str();
             const auto question = target.find('?');
-            sc::rest_request rest_request{
+            sc::rest_server::request incoming{
                 request.getStartingLine().method.std_str(),
                 target.substr(0, question),
                 oat_string(body),
                 oat_string(request.getHeader(oatpp::web::protocol::http::Header::AUTHORIZATION)),
                 client,
             };
-            rest_request.peer_address = peer;
+            incoming.peer_address = peer;
             for (const auto &[name, value]: request.getHeaders().getAll()) {
-                auto [it, added] = rest_request.headers.try_emplace(sc::lowercase(name.std_str()), value.std_str());
+                auto [it, added] = incoming.headers.try_emplace(sc::lowercase(name.std_str()), value.std_str());
                 if (!added) it->second += ", " + value.std_str();
             }
             if (question != std::string::npos) {
-                rest_request.query_string = target.substr(question + 1);
-                rest_request.query = parse_query(rest_request.query_string);
+                incoming.query_string = target.substr(question + 1);
+                incoming.query = parse_query(incoming.query_string);
             }
-            rest_request.content_type = oat_string(request.getHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE));
-            rest_request.json = parse_body(rest_request.body, rest_request.content_type);
+            incoming.content_type = oat_string(request.getHeader(oatpp::web::protocol::http::Header::CONTENT_TYPE));
+            incoming.json = parse_body(incoming.body, incoming.content_type);
             for (const auto &[name, value]: request.getPathVariables().getVariables()) {
-                rest_request.parameters[name.std_str()] = url_decode(value.std_str(), false);
+                incoming.parameters[name.std_str()] = url_decode(value.std_str(), false);
             }
 
             if (bearer_) {
-                auto claims = bearer_->claims(rest_request.authorization);
+                auto claims = bearer_->claims(incoming.authorization);
                 if (!claims) return error_response(401, "Unauthorized");
-                rest_request.claims = std::move(*claims);
+                incoming.claims = std::move(*claims);
             }
-            return handler_(rest_request);
+            return handler_(incoming);
         }
 
         // Needs the provider's extended connections, which record the peer address.
@@ -653,7 +653,7 @@ namespace {
                 oatpp::network::tcp::server::ConnectionProvider::ExtendedConnection::PROPERTY_PEER_ADDRESS));
         }
 
-        static std::shared_ptr<OutgoingResponse> make_response(const sc::rest_response &response) {
+        static std::shared_ptr<OutgoingResponse> make_response(const sc::rest_server::response &response) {
             if (response.status < 100 || response.status > 599) {
                 throw std::invalid_argument("REST handler returned an invalid HTTP status");
             }
@@ -666,7 +666,7 @@ namespace {
             return outgoing_response;
         }
 
-        sc::rest_handler handler_;
+        sc::rest_server::handler handler_;
         std::shared_ptr<const bearer_check> bearer_;
         std::shared_ptr<usage_stats> usage_;
         std::string route_;
@@ -674,7 +674,7 @@ namespace {
     };
 }
 
-class sc::rest_server::implementation {
+class sc::rest_server::server::implementation {
 public:
     explicit implementation(ip_endpoint endpoint) : endpoint_(std::move(endpoint)) {
         if (endpoint_.host.empty() || endpoint_.port <= 0 || endpoint_.port > 65535) {
@@ -695,11 +695,11 @@ public:
 
         jwt_ = std::make_shared<jwt_service>(std::move(configuration));
         bearer_ = jwt_;
-        routes_.push_back({"POST", "/create_token", [jwt = jwt_](const rest_request &request) {
+        routes_.push_back({"POST", "/create_token", [jwt = jwt_](const rest_server::request &request) {
                                return jwt->create_token(request);
                            },
                            nullptr, "A login: an access token (and a refresh token) for the routes that need one"});
-        routes_.push_back({"POST", "/refresh_token", [jwt = jwt_](const rest_request &request) {
+        routes_.push_back({"POST", "/refresh_token", [jwt = jwt_](const rest_server::request &request) {
                                return jwt->refresh_token(request);
                            },
                            nullptr, "A new access token for a refresh token"});
@@ -760,8 +760,8 @@ public:
         description_ = std::move(description);
     }
 
-    void add_route(std::string method, std::string path, rest_handler handler, const bool bearer_required, std::string description = {},
-                   std::vector<rest_parameter> parameters = {}) {
+    void add_route(std::string method, std::string path, rest_server::handler handler, const bool bearer_required, std::string description = {},
+                   std::vector<rest_server::parameter> parameters = {}) {
         if (path.empty() || path.front() != '/') throw std::invalid_argument("REST route path must start with '/'");
         if (!handler) throw std::invalid_argument("REST route handler must not be empty");
 
@@ -847,10 +847,10 @@ private:
     struct route {
         std::string method;
         std::string path;
-        rest_handler handler;
+        rest_server::handler handler;
         std::shared_ptr<const bearer_check> bearer; // null: open to all
         std::string description;
-        std::vector<rest_parameter> parameters;
+        std::vector<rest_server::parameter> parameters;
         bool deprecated = false;
         std::string replacement;
         std::string group; // empty: "General"
@@ -874,11 +874,11 @@ private:
     // program has a /usage of its own.
     void add_usage() {
         if (find_route("GET", "/usage") != routes_.end()) return;
-        routes_.push_back({"GET", "/usage", [this](const rest_request &request) {
+        routes_.push_back({"GET", "/usage", [this](const rest_server::request &request) {
                                if (request.query.value("format", std::string{}) == "json") {
-                                   return rest_response{200, usage().dump(2), content_type::json};
+                                   return rest_server::response{200, usage().dump(2), content_type::json};
                                }
-                               return rest_response{200, usage_metrics(), rest_content_type{"text/plain; version=0.0.4; charset=utf-8"}};
+                               return rest_server::response{200, usage_metrics(), rest_server::media_type{"text/plain; version=0.0.4; charset=utf-8"}};
                            },
                            nullptr,
                            "How the API has been used since it started: requests by route and answer, how long they "
@@ -892,7 +892,7 @@ private:
         struct entry {
             std::string method, path, description;
             bool bearer;
-            std::vector<rest_parameter> parameters;
+            std::vector<rest_server::parameter> parameters;
             bool deprecated = false;
             std::string replacement;
             std::string group;
@@ -972,14 +972,14 @@ private:
                     if (!each.replacement.empty()) operation["description"] = "Deprecated: use " + each.replacement + ".";
                 }
                 const auto in_path = path_parameters(each.path);
-                const auto described = [&](const std::string &name) -> const rest_parameter * {
-                    const auto found = std::ranges::find(each.parameters, name, &rest_parameter::name);
+                const auto described = [&](const std::string &name) -> const rest_server::parameter * {
+                    const auto found = std::ranges::find(each.parameters, name, &rest_server::parameter::name);
                     return found == each.parameters.end() ? nullptr : &*found;
                 };
-                const auto parameter_json = [](const std::string &name, const bool path, const rest_parameter *about) {
+                const auto parameter_json = [](const std::string &name, const bool path, const rest_server::parameter *about) {
                     static constexpr std::array<const char *, 4> types{"string", "integer", "number", "boolean"};
                     json item{{"name", name}, {"in", path ? "path" : "query"}, {"required", path || (about && about->required)},
-                              {"schema", {{"type", types[static_cast<std::size_t>(about ? about->type : rest_parameter_type::string)]}}}};
+                              {"schema", {{"type", types[static_cast<std::size_t>(about ? about->type : rest_server::parameter_type::string)]}}}};
                     if (about && !about->description.empty()) item["description"] = about->description;
                     if (about && !about->example.empty()) item["example"] = about->example;
                     return item;
@@ -1131,27 +1131,27 @@ window.onload = () => {
 )";
         // The full lists for a request with a valid bearer token, else the open routes' only:
         // saying the token was refused when one was sent and routes are hidden.
-        const auto pick = [bearer = bearer_, all, public_, refused, hidden](const rest_request &request)
+        const auto pick = [bearer = bearer_, all, public_, refused, hidden](const rest_server::request &request)
                 -> const std::pair<std::string, std::string> & {
             if (bearer && bearer->claims(request.authorization)) return all;
             return hidden > 0 && !request.authorization.empty() ? refused : public_;
         };
-        const auto serve = [this, &taken](const std::string &path, rest_handler handler) {
+        const auto serve = [this, &taken](const std::string &path, rest_server::handler handler) {
             if (taken("GET", path)) return;
             routes_.push_back({"GET", path, std::move(handler), nullptr, ""});
         };
-        serve("/", [pick](const rest_request &request) {
-            return rest_response{200, pick(request).first, rest_content_type{"text/plain; charset=utf-8"}};
+        serve("/", [pick](const rest_server::request &request) {
+            return rest_server::response{200, pick(request).first, rest_server::media_type{"text/plain; charset=utf-8"}};
         });
-        serve("/openapi.json", [pick](const rest_request &request) {
-            return rest_response{200, pick(request).second, rest_content_type{"application/json"}};
+        serve("/openapi.json", [pick](const rest_server::request &request) {
+            return rest_server::response{200, pick(request).second, rest_server::media_type{"application/json"}};
         });
-        serve("/docs", [page](const rest_request &) { return rest_response{200, page, rest_content_type{"text/html; charset=utf-8"}}; });
+        serve("/docs", [page](const rest_server::request &) { return rest_server::response{200, page, rest_server::media_type{"text/html; charset=utf-8"}}; });
         // Any other path: 404, with the list, so a wrong path shows the right ones. Last, so the
         // routes above win.
         for (const char *method: {"GET", "POST"})
-            routes_.push_back({method, "/*", [pick](const rest_request &request) {
-                                   return rest_response{404, pick(request).first, rest_content_type{"text/plain; charset=utf-8"}};
+            routes_.push_back({method, "/*", [pick](const rest_server::request &request) {
+                                   return rest_server::response{404, pick(request).first, rest_server::media_type{"text/plain; charset=utf-8"}};
                                },
                                nullptr, ""});
     }
@@ -1177,74 +1177,74 @@ window.onload = () => {
     std::shared_ptr<oatpp::network::Server> server_;
 };
 
-sc::rest_server::rest_server(ip_endpoint endpoint) : implementation_(std::make_unique<implementation>(std::move(endpoint))) {
+sc::rest_server::server::server::server(ip_endpoint endpoint) : implementation_(std::make_unique<implementation>(std::move(endpoint))) {
 }
 
-sc::rest_server::~rest_server() = default;
+sc::rest_server::server::server::~server() = default;
 
-void sc::rest_server::get(std::string path, rest_handler handler) {
+void sc::rest_server::server::get(std::string path, rest_server::handler handler) {
     implementation_->add_route("GET", std::move(path), std::move(handler), false);
 }
 
-void sc::rest_server::post(std::string path, rest_handler handler) {
+void sc::rest_server::server::post(std::string path, rest_server::handler handler) {
     implementation_->add_route("POST", std::move(path), std::move(handler), false);
 }
 
-void sc::rest_server::bearer_get(std::string path, rest_handler handler) {
+void sc::rest_server::server::bearer_get(std::string path, rest_server::handler handler) {
     implementation_->add_route("GET", std::move(path), std::move(handler), true);
 }
 
-void sc::rest_server::bearer_post(std::string path, rest_handler handler) {
+void sc::rest_server::server::bearer_post(std::string path, rest_server::handler handler) {
     implementation_->add_route("POST", std::move(path), std::move(handler), true);
 }
 
-void sc::rest_server::get(std::string path, rest_handler handler, std::string description) {
+void sc::rest_server::server::get(std::string path, rest_server::handler handler, std::string description) {
     implementation_->add_route("GET", std::move(path), std::move(handler), false, std::move(description));
 }
 
-void sc::rest_server::post(std::string path, rest_handler handler, std::string description) {
+void sc::rest_server::server::post(std::string path, rest_server::handler handler, std::string description) {
     implementation_->add_route("POST", std::move(path), std::move(handler), false, std::move(description));
 }
 
-void sc::rest_server::bearer_get(std::string path, rest_handler handler, std::string description) {
+void sc::rest_server::server::bearer_get(std::string path, rest_server::handler handler, std::string description) {
     implementation_->add_route("GET", std::move(path), std::move(handler), true, std::move(description));
 }
 
-void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::string description) {
+void sc::rest_server::server::bearer_post(std::string path, rest_server::handler handler, std::string description) {
     implementation_->add_route("POST", std::move(path), std::move(handler), true, std::move(description));
 }
 
-void sc::rest_server::get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters) {
+void sc::rest_server::server::get(std::string path, rest_server::handler handler, std::string description, std::vector<rest_server::parameter> parameters) {
     implementation_->add_route("GET", std::move(path), std::move(handler), false, std::move(description), std::move(parameters));
 }
 
-void sc::rest_server::post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters) {
+void sc::rest_server::server::post(std::string path, rest_server::handler handler, std::string description, std::vector<rest_server::parameter> parameters) {
     implementation_->add_route("POST", std::move(path), std::move(handler), false, std::move(description), std::move(parameters));
 }
 
-void sc::rest_server::bearer_get(std::string path, rest_handler handler, std::string description,
-                                 std::vector<rest_parameter> parameters) {
+void sc::rest_server::server::bearer_get(std::string path, rest_server::handler handler, std::string description,
+                                 std::vector<rest_server::parameter> parameters) {
     implementation_->add_route("GET", std::move(path), std::move(handler), true, std::move(description), std::move(parameters));
 }
 
-void sc::rest_server::bearer_post(std::string path, rest_handler handler, std::string description,
-                                  std::vector<rest_parameter> parameters) {
+void sc::rest_server::server::bearer_post(std::string path, rest_server::handler handler, std::string description,
+                                  std::vector<rest_server::parameter> parameters) {
     implementation_->add_route("POST", std::move(path), std::move(handler), true, std::move(description), std::move(parameters));
 }
 
-void sc::rest_server::documentation(const bool served) {
+void sc::rest_server::server::documentation(const bool served) {
     implementation_->documentation(served);
 }
 
-void sc::rest_server::documentation_needs_token(const bool hidden) {
+void sc::rest_server::server::documentation_needs_token(const bool hidden) {
     implementation_->documentation_needs_token(hidden);
 }
 
-void sc::rest_server::bearer_token(std::string token) {
+void sc::rest_server::server::bearer_token(std::string token) {
     implementation_->bearer_token(std::move(token));
 }
 
-void sc::rest_server::log_level(const sc::log_level level) {
+void sc::rest_server::server::log_level(const sc::log_level level) {
     const std::lock_guard lock{environment_mutex};
     oatpp_level = level;
     if (environment_users == 0) return; // taken up when the first server starts
@@ -1259,50 +1259,50 @@ void sc::rest_server::log_level(const sc::log_level level) {
     }
 }
 
-void sc::rest_server::group(std::string name) {
+void sc::rest_server::server::group(std::string name) {
     implementation_->group(std::move(name));
 }
 
-void sc::rest_server::deprecated(const std::string &method, const std::string &path, std::string replacement) {
+void sc::rest_server::server::deprecated(const std::string &method, const std::string &path, std::string replacement) {
     implementation_->deprecate(method, path, std::move(replacement));
 }
 
-void sc::rest_server::trusted_proxies(std::vector<std::string> addresses) {
+void sc::rest_server::server::trusted_proxies(std::vector<std::string> addresses) {
     implementation_->trusted_proxies(std::move(addresses));
 }
 
-void sc::rest_server::show_usage(const bool served) {
+void sc::rest_server::server::show_usage(const bool served) {
     implementation_->show_usage(served);
 }
 
-nlohmann::json sc::rest_server::usage() const {
+nlohmann::json sc::rest_server::server::usage() const {
     return implementation_->usage();
 }
 
-std::string sc::rest_server::usage_metrics() const {
+std::string sc::rest_server::server::usage_metrics() const {
     return implementation_->usage_metrics();
 }
 
-void sc::rest_server::reset_usage() {
+void sc::rest_server::server::reset_usage() {
     implementation_->reset_usage();
 }
 
-void sc::rest_server::api_info(std::string title, std::string version, std::string description) {
+void sc::rest_server::server::api_info(std::string title, std::string version, std::string description) {
     implementation_->api_info(std::move(title), std::move(version), std::move(description));
 }
 
-void sc::rest_server::configure_jwt(jwt_configuration configuration) {
+void sc::rest_server::server::configure_jwt(jwt_configuration configuration) {
     implementation_->configure_jwt(std::move(configuration));
 }
 
-void sc::rest_server::run() {
+void sc::rest_server::server::run() {
     implementation_->run();
 }
 
-void sc::rest_server::stop() {
+void sc::rest_server::server::stop() {
     implementation_->stop();
 }
 
-bool sc::rest_server::wait_until_running(const std::chrono::milliseconds timeout) const {
+bool sc::rest_server::server::wait_until_running(const std::chrono::milliseconds timeout) const {
     return implementation_->wait_until_running(timeout);
 }

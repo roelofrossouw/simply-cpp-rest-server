@@ -4,7 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <functional>
-#include <sc/core/ip_endpoint.h>
+#include <sc/net/ip_endpoint.h>
 #include <sc/core/log_level.h>
 #include <map>
 #include <memory>
@@ -13,14 +13,14 @@
 #include <string_view>
 #include <vector>
 
-namespace sc {
-    struct rest_request {
+namespace sc::rest_server {
+    struct request {
         std::string method;
         // The path, without the query string: "/orders" for GET /orders?page=2.
         std::string path;
         std::string body;
         std::string authorization;
-        // The client's IP address: behind a trusted proxy (see rest_server::trusted_proxies()), the one
+        // The client's IP address: behind a trusted proxy (see rest_server::server::trusted_proxies()), the one
         // the proxy says in X-Forwarded-For; otherwise the connection's.
         std::string remote_address;
         // For bearer_get()/bearer_post() routes, the verified access token's payload: "sub" (what
@@ -52,19 +52,19 @@ namespace sc {
     };
 
     // What a documented parameter holds, for the OpenAPI document.
-    enum class rest_parameter_type { string, integer, number, boolean };
+    enum class parameter_type { string, integer, number, boolean };
 
     // A route's parameter, for its documentation: one named like a {segment} of the
     // path describes that path parameter, any other a query parameter (?name=...).
-    struct rest_parameter {
+    struct parameter {
         std::string name;
         std::string description;
         bool required = false;   // path parameters always are
-        rest_parameter_type type = rest_parameter_type::string;
+        rest_server::parameter_type type = rest_server::parameter_type::string;
         std::string example;     // shown, and filled in, by Swagger UI
     };
 
-    // The usual response content types. Any other can still be given as a string (rest_content_type).
+    // The usual response content types. Any other can still be given as a string (rest_server::media_type).
     enum class content_type { text, json, csv, binary };
 
     inline constexpr std::array<std::string_view, 4> content_type_headers{
@@ -79,35 +79,35 @@ namespace sc {
     }
 
     // A response's Content-Type header: a content_type, or any header value as a string, so a
-    // handler can write sc::content_type::json or "image/png" alike.
-    class rest_content_type {
+    // handler can write sc::rest_server::content_type::json or "image/png" alike.
+    class media_type {
     public:
-        rest_content_type(const content_type type = content_type::text) : value_(content_type_header(type)) {
+        media_type(const content_type type = content_type::text) : value_(content_type_header(type)) {
         }
 
-        rest_content_type(std::string value) : value_(std::move(value)) {
+        media_type(std::string value) : value_(std::move(value)) {
         }
 
-        rest_content_type(const char *value) : value_(value) {
+        media_type(const char *value) : value_(value) {
         }
 
         [[nodiscard]] const std::string &value() const { return value_; }
 
         operator const std::string &() const { return value_; }
 
-        friend bool operator==(const rest_content_type &, const rest_content_type &) = default;
+        friend bool operator==(const rest_server::media_type &, const rest_server::media_type &) = default;
 
     private:
         std::string value_;
     };
 
-    struct rest_response {
+    struct response {
         int status = 200;
         std::string body; // bytes: binary bodies may contain zero bytes
-        rest_content_type content_type;
+        rest_server::media_type content_type;
     };
 
-    using rest_handler = std::function<rest_response(const rest_request &)>;
+    using handler = std::function<rest_server::response(const rest_server::request &)>;
     // Checks a login for POST /create_token. Returns the subject to put in the tokens' "sub" claim,
     // such as the user's id (or simply the username); an empty string refuses the login.
     using jwt_credential_validator = std::function<std::string(std::string_view username, std::string_view password)>;
@@ -119,31 +119,31 @@ namespace sc {
         jwt_credential_validator validate_credentials;
     };
 
-    class rest_server {
+    class server {
     public:
-        explicit rest_server(ip_endpoint endpoint);
-        ~rest_server();
+        explicit server(ip_endpoint endpoint);
+        ~server();
 
-        rest_server(const rest_server &) = delete;
-        rest_server &operator=(const rest_server &) = delete;
+        server(const rest_server::server &) = delete;
+        rest_server::server &operator=(const rest_server::server &) = delete;
 
         // Routes match the path exactly, except a {name} segment, which matches any one segment
-        // and hands its value to the handler in rest_request::parameters: "/orders/{order}".
+        // and hands its value to the handler in rest_server::request::parameters: "/orders/{order}".
         // Routes are tried in the order they were added.
-        void get(std::string path, rest_handler handler);
-        void post(std::string path, rest_handler handler);
-        void bearer_get(std::string path, rest_handler handler);
-        void bearer_post(std::string path, rest_handler handler);
+        void get(std::string path, rest_server::handler handler);
+        void post(std::string path, rest_server::handler handler);
+        void bearer_get(std::string path, rest_server::handler handler);
+        void bearer_post(std::string path, rest_server::handler handler);
         // The same, with a description for the API's documentation.
-        void get(std::string path, rest_handler handler, std::string description);
-        void post(std::string path, rest_handler handler, std::string description);
-        void bearer_get(std::string path, rest_handler handler, std::string description);
-        void bearer_post(std::string path, rest_handler handler, std::string description);
+        void get(std::string path, rest_server::handler handler, std::string description);
+        void post(std::string path, rest_server::handler handler, std::string description);
+        void bearer_get(std::string path, rest_server::handler handler, std::string description);
+        void bearer_post(std::string path, rest_server::handler handler, std::string description);
         // The same, with the route's parameters documented.
-        void get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
-        void post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
-        void bearer_get(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
-        void bearer_post(std::string path, rest_handler handler, std::string description, std::vector<rest_parameter> parameters);
+        void get(std::string path, rest_server::handler handler, std::string description, std::vector<rest_server::parameter> parameters);
+        void post(std::string path, rest_server::handler handler, std::string description, std::vector<rest_server::parameter> parameters);
+        void bearer_get(std::string path, rest_server::handler handler, std::string description, std::vector<rest_server::parameter> parameters);
+        void bearer_post(std::string path, rest_server::handler handler, std::string description, std::vector<rest_server::parameter> parameters);
         void configure_jwt(jwt_configuration configuration);
         // Instead of JWT: the bearer routes want this one token, "Authorization: Bearer <token>"
         // (compared in constant time); their handlers' claims are {"sub": "token"}. Not with

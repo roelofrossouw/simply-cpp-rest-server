@@ -18,7 +18,7 @@
 #include <sc/http/client.h>
 #include <sc/core/sc.h>
 
-#include <sc/rest-server/rest_server.h>
+#include <sc/rest-server/server.h>
 
 namespace {
     // A new signing secret each run: the demo verifies only its own tokens. A real service
@@ -34,7 +34,7 @@ namespace {
     // client side can't leave a joinable std::thread behind (which would terminate).
     class server_thread_guard {
     public:
-        server_thread_guard(sc::rest_server &server, std::thread &thread) : server_(server), thread_(thread) {
+        server_thread_guard(sc::rest_server::server &server, std::thread &thread) : server_(server), thread_(thread) {
         }
 
         ~server_thread_guard() {
@@ -43,7 +43,7 @@ namespace {
         }
 
     private:
-        sc::rest_server &server_;
+        sc::rest_server::server &server_;
         std::thread &thread_;
     };
 }
@@ -51,19 +51,19 @@ namespace {
 // [readme]
 namespace {
     // GET /hello: plain text.
-    sc::rest_response hello(const sc::rest_request &) {
+    sc::rest_server::response hello(const sc::rest_server::request &) {
         return {200, "Hello World!"};
     }
 
     // POST /echo: the request back as JSON. request.query is the query string as JSON, and
     // request.json a JSON body as JSON.
-    sc::rest_response echo(const sc::rest_request &request) {
+    sc::rest_server::response echo(const sc::rest_server::request &request) {
         const nlohmann::json response{
             {"Path", request.path},
             {"Query", request.query},
             {"Post", request.json}
         };
-        return {200, response.dump(2), sc::content_type::json};
+        return {200, response.dump(2), sc::rest_server::content_type::json};
     }
 
     // POST /create_token's check: the "sub" for the tokens (a user id, say), or "" to refuse the
@@ -75,18 +75,18 @@ namespace {
     // GET /account, with a bearer token. request.claims is the verified token's payload: "sub"
     // is who logged in, "source" the IP address the token was issued to, "exp" when it expires
     // (Unix time).
-    sc::rest_response account(const sc::rest_request &request) {
+    sc::rest_server::response account(const sc::rest_server::request &request) {
         const auto expires = sc::datetime::from_unix(request.claims.at("exp").get<long long>());
         const nlohmann::json details{
             {"account", request.claims.at("sub")},
             {"source", request.claims.at("source")},
             {"expires", expires.format("%Y-%m-%d %H:%M:%S %Z")}
         };
-        return {200, details.dump(), sc::content_type::json};
+        return {200, details.dump(), sc::rest_server::content_type::json};
     }
 
     // Every route, and the JWT bearer authentication, on the server (before it runs).
-    void register_routes(sc::rest_server &server) {
+    void register_routes(sc::rest_server::server &server) {
         // A description each, for the documentation the server makes of its routes (GET /,
         // /openapi.json, /docs).
         server.api_info("sc-rest-server demo", "1", "A server and its client in one program");
@@ -99,7 +99,7 @@ namespace {
     }
 
     // Serves until stop(). run() blocks, so this runs on a thread of its own.
-    void serve(sc::rest_server &server) {
+    void serve(sc::rest_server::server &server) {
         try {
             server.run();
         } catch (const std::exception &error) {
@@ -116,7 +116,7 @@ int main() {
         sc::console::output() << "The server listens on " << base_url << "  (SC_REST_SERVER_DEMO_SERVER)\n";
 
         sc::timer sw;
-        sc::rest_server server{endpoint};
+        sc::rest_server::server server{endpoint};
         register_routes(server);
 
         std::thread server_thread{serve, std::ref(server)};

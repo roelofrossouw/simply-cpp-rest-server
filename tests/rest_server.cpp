@@ -1,4 +1,4 @@
-#include <sc/rest-server/rest_server.h>
+#include <sc/rest-server/server.h>
 #include <sc_test.h>
 
 #include <nlohmann/json.hpp>
@@ -127,7 +127,7 @@ int main() {
     }
 
     const int port = available_port();
-    sc::rest_server server{{"127.0.0.1", port}};
+    sc::rest_server::server server{{"127.0.0.1", port}};
     server.configure_jwt({
         .secret = secret,
         .access_token_lifetime = std::chrono::seconds{300},
@@ -138,53 +138,53 @@ int main() {
         },
     });
     server.api_info("Test API", "1.2.3", "For the tests");
-    server.get("/health", [](const sc::rest_request &request) {
-        return sc::rest_response{200, request.method + " ready"};
+    server.get("/health", [](const sc::rest_server::request &request) {
+        return sc::rest_server::response{200, request.method + " ready"};
     }, "Whether it's up");
-    server.bearer_get("/protected", [](const sc::rest_request &request) {
-        return sc::rest_response{200, "protected for " + request.claims.at("sub").get<std::string>() + " (" +
+    server.bearer_get("/protected", [](const sc::rest_server::request &request) {
+        return sc::rest_server::response{200, "protected for " + request.claims.at("sub").get<std::string>() + " (" +
                                       request.claims.at("type").get<std::string>() + ") from " +
                                       request.claims.at("source").get<std::string>()};
     });
-    server.get("/csv", [](const sc::rest_request &) {
-        return sc::rest_response{200, "name,kind\nsimply-cpp,library\n", sc::content_type::csv};
+    server.get("/csv", [](const sc::rest_server::request &) {
+        return sc::rest_server::response{200, "name,kind\nsimply-cpp,library\n", sc::rest_server::content_type::csv};
     });
-    server.get("/binary", [](const sc::rest_request &) {
-        return sc::rest_response{200, std::string("a\0b\xff", 4), sc::content_type::binary};
+    server.get("/binary", [](const sc::rest_server::request &) {
+        return sc::rest_server::response{200, std::string("a\0b\xff", 4), sc::rest_server::content_type::binary};
     });
-    server.get("/custom", [](const sc::rest_request &) {
-        return sc::rest_response{200, "<svg/>", "image/svg+xml"};
+    server.get("/custom", [](const sc::rest_server::request &) {
+        return sc::rest_server::response{200, "<svg/>", "image/svg+xml"};
     });
-    server.get("/address", [](const sc::rest_request &request) {
-        return sc::rest_response{200, request.remote_address};
+    server.get("/address", [](const sc::rest_server::request &request) {
+        return sc::rest_server::response{200, request.remote_address};
     });
-    server.get("/peer", [](const sc::rest_request &request) {
-        return sc::rest_response{200, request.peer_address};
+    server.get("/peer", [](const sc::rest_server::request &request) {
+        return sc::rest_server::response{200, request.peer_address};
     });
     // Everything a handler is told about the request, back as JSON.
-    const auto inspect = [](const sc::rest_request &request) {
+    const auto inspect = [](const sc::rest_server::request &request) {
         const json seen{{"path", request.path}, {"query_string", request.query_string}, {"query", request.query},
                         {"content_type", request.content_type}, {"json", request.json}, {"body", request.body},
                         {"headers", request.headers}};
-        return sc::rest_response{200, seen.dump(), sc::content_type::json};
+        return sc::rest_server::response{200, seen.dump(), sc::rest_server::content_type::json};
     };
     server.get("/inspect", inspect);
     server.post("/inspect", inspect);
     // {name} segments: the route matches any value there, and the handler gets them decoded.
-    const auto located = [](const sc::rest_request &request) {
-        return sc::rest_response{200, json{{"parameters", request.parameters}, {"path", request.path}}.dump(), sc::content_type::json};
+    const auto located = [](const sc::rest_server::request &request) {
+        return sc::rest_server::response{200, json{{"parameters", request.parameters}, {"path", request.path}}.dump(), sc::rest_server::content_type::json};
     };
     server.group("Tracking"); // the routes below, until the next group()
     server.get("/tel/location/{lat}/{lng}", located, "A place's name", {
-        {.name = "lat", .description = "degrees north", .type = sc::rest_parameter_type::number, .example = "-26.96"},
-        {.name = "radius", .description = "metres around it", .type = sc::rest_parameter_type::integer, .example = "500"},
+        {.name = "lat", .description = "degrees north", .type = sc::rest_server::parameter_type::number, .example = "-26.96"},
+        {.name = "radius", .description = "metres around it", .type = sc::rest_server::parameter_type::integer, .example = "500"},
         {.name = "key", .description = "the caller's key", .required = true}});
     server.get("/tel/gps/{device}", located);
     server.get("/tel/gps", located);
     server.deprecated("GET", "/tel/gps", "GET /gps");
     server.group({}); // back to General
-    server.get("/claims", [](const sc::rest_request &request) {
-        return sc::rest_response{200, request.claims.is_null() ? "none" : request.claims.dump()};
+    server.get("/claims", [](const sc::rest_server::request &request) {
+        return sc::rest_server::response{200, request.claims.is_null() ? "none" : request.claims.dump()};
     });
 
     SECTION("Not running before run()");
@@ -196,14 +196,14 @@ int main() {
     CHECK(server.wait_until_running());
 
     SECTION("Content types");
-    CHECK_EQ(sc::content_type_header(sc::content_type::text), std::string_view{"text/plain; charset=utf-8"});
-    CHECK_EQ(sc::content_type_header(sc::content_type::json), std::string_view{"application/json"});
-    CHECK_EQ(sc::content_type_header(sc::content_type::csv), std::string_view{"text/csv; charset=utf-8"});
-    CHECK_EQ(sc::content_type_header(sc::content_type::binary), std::string_view{"application/octet-stream"});
-    CHECK((sc::rest_response{}.content_type == sc::content_type::text));
-    CHECK((sc::rest_content_type{sc::content_type::json} == "application/json"));
-    CHECK_EQ(sc::rest_content_type{std::string{"image/png"}}.value(), std::string{"image/png"});
-    const std::string as_string = sc::rest_content_type{sc::content_type::csv};
+    CHECK_EQ(sc::rest_server::content_type_header(sc::rest_server::content_type::text), std::string_view{"text/plain; charset=utf-8"});
+    CHECK_EQ(sc::rest_server::content_type_header(sc::rest_server::content_type::json), std::string_view{"application/json"});
+    CHECK_EQ(sc::rest_server::content_type_header(sc::rest_server::content_type::csv), std::string_view{"text/csv; charset=utf-8"});
+    CHECK_EQ(sc::rest_server::content_type_header(sc::rest_server::content_type::binary), std::string_view{"application/octet-stream"});
+    CHECK((sc::rest_server::response{}.content_type == sc::rest_server::content_type::text));
+    CHECK((sc::rest_server::media_type{sc::rest_server::content_type::json} == "application/json"));
+    CHECK_EQ(sc::rest_server::media_type{std::string{"image/png"}}.value(), std::string{"image/png"});
+    const std::string as_string = sc::rest_server::media_type{sc::rest_server::content_type::csv};
     CHECK_EQ(as_string, std::string{"text/csv; charset=utf-8"});
 
     SECTION("Unprotected GET route");
@@ -497,8 +497,8 @@ int main() {
     server_thread.join();
 
     SECTION("oatpp's log level, set while running");
-    CHECK_NOTHROW(sc::rest_server::log_level(sc::log_level::debug));
-    CHECK_NOTHROW(sc::rest_server::log_level(sc::log_level::warning));
+    CHECK_NOTHROW(sc::rest_server::server::log_level(sc::log_level::debug));
+    CHECK_NOTHROW(sc::rest_server::server::log_level(sc::log_level::warning));
 
     SECTION("Not running after stop()");
     CHECK(!server.wait_until_running(std::chrono::milliseconds{0}));
@@ -506,12 +506,12 @@ int main() {
     SECTION("Without documentation: no list, no catch-all");
     {
         const int other_port = available_port();
-        sc::rest_server plain{{"127.0.0.1", other_port}};
+        sc::rest_server::server plain{{"127.0.0.1", other_port}};
         plain.documentation(false);
         plain.show_usage(false);
         plain.trusted_proxies({}); // no proxies believed
-        plain.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; });
-        plain.get("/address", [](const sc::rest_request &request) { return sc::rest_response{200, request.remote_address}; });
+        plain.get("/health", [](const sc::rest_server::request &) { return sc::rest_server::response{200, "up"}; });
+        plain.get("/address", [](const sc::rest_server::request &request) { return sc::rest_server::response{200, request.remote_address}; });
         CHECK_THROWS_AS(plain.deprecated("GET", "/nothing"), std::invalid_argument); // no such route
         CHECK_THROWS_AS(plain.deprecated("POST", "/health"), std::invalid_argument); // by method too
         std::thread serving{[&plain] { plain.run(); }};
@@ -531,9 +531,9 @@ int main() {
     {
         const int token_port = available_port();
         const std::string token(40, 'k');
-        sc::rest_server agent{{"127.0.0.1", token_port}};
+        sc::rest_server::server agent{{"127.0.0.1", token_port}};
         agent.api_info("Agent", "1.0", "For the tests");
-        CHECK_THROWS_AS(agent.bearer_get("/early", [](const sc::rest_request &) { return sc::rest_response{}; }), std::logic_error);
+        CHECK_THROWS_AS(agent.bearer_get("/early", [](const sc::rest_server::request &) { return sc::rest_server::response{}; }), std::logic_error);
         CHECK_THROWS_AS(agent.bearer_token(""), std::invalid_argument);
         agent.bearer_token(token);
         CHECK_THROWS_AS(agent.bearer_token(token), std::logic_error); // once
@@ -541,11 +541,11 @@ int main() {
                                              [](std::string_view, std::string_view) { return std::string{"x"}; }}),
                         std::logic_error); // not both
         agent.documentation_needs_token(true);
-        agent.get("/health", [](const sc::rest_request &) { return sc::rest_response{200, "up"}; }, "Whether it's up");
-        agent.bearer_get("/containers", [](const sc::rest_request &request) {
-            return sc::rest_response{200, request.claims.value("sub", std::string{})};
+        agent.get("/health", [](const sc::rest_server::request &) { return sc::rest_server::response{200, "up"}; }, "Whether it's up");
+        agent.bearer_get("/containers", [](const sc::rest_server::request &request) {
+            return sc::rest_server::response{200, request.claims.value("sub", std::string{})};
         }, "The containers");
-        agent.bearer_post("/jobs", [](const sc::rest_request &) { return sc::rest_response{200, "queued"}; }, "A job");
+        agent.bearer_post("/jobs", [](const sc::rest_server::request &) { return sc::rest_server::response{200, "queued"}; }, "A job");
         std::thread serving{[&agent] { agent.run(); }};
         CHECK(agent.wait_until_running());
         const auto bearer = "Bearer " + token;
@@ -601,8 +601,8 @@ int main() {
     SECTION("wait_until_running() reports a server that cannot bind at once");
     {
         // 192.0.2.1 is a documentation address, never local, so binding to it fails.
-        sc::rest_server unbindable{{"192.0.2.1", available_port()}};
-        unbindable.get("/health", [](const sc::rest_request &) { return sc::rest_response{}; });
+        sc::rest_server::server unbindable{{"192.0.2.1", available_port()}};
+        unbindable.get("/health", [](const sc::rest_server::request &) { return sc::rest_server::response{}; });
         bool threw = false;
         std::thread failing{[&unbindable, &threw] {
             try {
