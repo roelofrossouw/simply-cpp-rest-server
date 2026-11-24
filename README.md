@@ -93,7 +93,7 @@ server.get("/logo.svg", logo);
 | `binary` | `application/octet-stream` |
 
 `sc::rest_server::content_type_header(type)` gives the header value, and
-`sc::content_type_headers` holds them all, in the enum's order.
+`sc::rest_server::content_type_headers` holds them all, in the enum's order.
 
 Call `stop()` from another thread to end `run()`. When `run()` is on a
 background thread, `wait_until_running(timeout)` waits until it has bound the
