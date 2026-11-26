@@ -102,6 +102,13 @@ or after the timeout (default 5 seconds). Routes must be registered
 before the server starts. Oatpp is supplied by the `sc-oatpp` package; its
 OpenAPI extension is intentionally not part of this initial API.
 
+A service that binds a particular address (its private address on a container, say) can use
+`run_retrying(retry, on_failure)` instead (since 3.1.0): when binding fails, because the address
+isn't there yet (a container's DHCP address comes after `network-online.target`: "Cannot assign
+requested address") or the port is still taken, it tries again every `retry` (2 s by default) until
+it binds, then serves as `run()` does. `on_failure` hears the first failure, then at most one a
+minute, and "bound after N failures" once it binds. `stop()` ends it, before or after binding.
+
 ## Demo
 
 `sc-rest-server-demo` runs a server and its client in one program: the server in

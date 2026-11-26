@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
+#include <mutex>
 #include <thread>
 #include <unistd.h>
 
@@ -616,6 +617,58 @@ int main() {
         CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{2});
         failing.join();
         CHECK(threw);
+    }
+
+    SECTION("run_retrying(): tries again until it binds, tells about it, and ends at stop()");
+    {
+        // An address that isn't there: it keeps trying, tells once (then once a minute), stop() ends it.
+        sc::rest_server::server unbindable{{"192.0.2.1", available_port()}};
+        std::vector<std::string> told;
+        std::mutex told_mutex;
+        const auto tell = [&](const std::string &what) {
+            const std::lock_guard lock{told_mutex};
+            told.push_back(what);
+        };
+        std::thread retrying{[&] { unbindable.run_retrying(std::chrono::milliseconds{50}, tell); }};
+        std::this_thread::sleep_for(std::chrono::milliseconds{400});
+        CHECK(!unbindable.wait_until_running(std::chrono::milliseconds{0}));
+        const auto started = std::chrono::steady_clock::now();
+        unbindable.stop();
+        retrying.join();
+        CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{1});
+        CHECK_EQ(told.size(), std::size_t{1}); // several failures, told once
+        CHECK(told.at(0).find("trying again every 50 ms") != std::string::npos);
+
+        // stop() before it starts: it returns without binding
+        const int free_port = available_port();
+        sc::rest_server::server early{{"127.0.0.1", free_port}};
+        early.stop();
+        early.run_retrying(std::chrono::milliseconds{50});
+        CHECK(!early.wait_until_running(std::chrono::milliseconds{0}));
+
+        // The port taken: it binds once the other server lets go, and says so
+        const int port = available_port();
+        sc::rest_server::server holder{{"127.0.0.1", port}};
+        holder.get("/who", [](const sc::rest_server::request &) { return sc::rest_server::response{200, "holder"}; });
+        std::thread holding{[&holder] { holder.run(); }};
+        CHECK(holder.wait_until_running());
+        sc::rest_server::server waiting{{"127.0.0.1", port}};
+        waiting.get("/who", [](const sc::rest_server::request &) { return sc::rest_server::response{200, "waiting"}; });
+        told.clear();
+        std::thread second{[&] { waiting.run_retrying(std::chrono::milliseconds{50}, tell); }};
+        std::this_thread::sleep_for(std::chrono::milliseconds{300});
+        CHECK(request(port, "GET", "/who").ends_with("holder"));
+        holder.stop();
+        holding.join();
+        CHECK(waiting.wait_until_running(std::chrono::seconds{3}));
+        CHECK(request(port, "GET", "/who").ends_with("waiting"));
+        waiting.stop();
+        second.join();
+        {
+            const std::lock_guard lock{told_mutex};
+            CHECK_EQ(told.size(), std::size_t{2});
+            if (told.size() == 2) CHECK(told.at(1).starts_with("bound after "));
+        }
     }
 
     TEST_SUMMARY();

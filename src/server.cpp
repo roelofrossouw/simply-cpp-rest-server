@@ -778,11 +778,52 @@ public:
         group_ = std::move(name);
     }
 
-    void run() {
+    void run() { run_once(false); }
+
+    void run_retrying(const std::chrono::milliseconds retry, const std::function<void(const std::string &)> &on_failure) {
+        using clock = std::chrono::steady_clock;
+        long failures = 0;
+        std::optional<clock::time_point> told;
+        {
+            const std::lock_guard lock{mutex_};
+            if (!server_) state_ = run_state::idle;
+        }
+        for (;;) {
+            try {
+                // told once it's bound, after failures
+                bound_note_ = failures > 0 && on_failure ? std::function<void()>{[&] {
+                    on_failure("bound after " + std::to_string(failures) + (failures == 1 ? " failure" : " failures"));
+                }} : std::function<void()>{};
+                run_once(true);
+                bound_note_ = {};
+                break; // stopped (before binding, or after serving)
+            } catch (const bind_failure &error) {
+                bound_note_ = {};
+                ++failures;
+                const auto now = clock::now();
+                if (on_failure && (!told || now - *told >= std::chrono::minutes{1})) {
+                    on_failure(std::string{error.what()} + " (trying again every " + std::to_string(retry.count()) + " ms)");
+                    told = now;
+                }
+                std::unique_lock lock{mutex_};
+                if (state_changed_.wait_for(lock, retry, [this] { return stop_requested_; })) break;
+            }
+        }
+        {
+            const std::lock_guard lock{mutex_};
+            stop_requested_ = false;
+            state_ = run_state::ended; // stopped before binding, or after serving
+        }
+        state_changed_.notify_all();
+    }
+
+    void run_once(const bool honour_stop) {
         std::shared_ptr<oatpp::network::Server> server;
         {
             const std::lock_guard lock{mutex_};
             if (server_) throw std::logic_error("REST server is already running");
+            if (honour_stop && stop_requested_) return;
+            if (!honour_stop) stop_requested_ = false; // run(): an earlier stop() while idle doesn't count
 
             try {
                 if (usage_served_ && !usage_added_) {
@@ -803,12 +844,24 @@ public:
                 }
 
                 // Creating the provider binds and listens, so connections are accepted from here on.
-                const auto provider = oatpp::network::tcp::server::ConnectionProvider::createShared(
-                    {endpoint_.host.c_str(), static_cast<v_uint16>(endpoint_.port), oatpp::network::Address::IP_4},
-                    true);  // extended connections, so requests know the client's address
+                std::shared_ptr<oatpp::network::tcp::server::ConnectionProvider> provider;
+                try {
+                    provider = oatpp::network::tcp::server::ConnectionProvider::createShared(
+                        {endpoint_.host.c_str(), static_cast<v_uint16>(endpoint_.port), oatpp::network::Address::IP_4},
+                        true);  // extended connections, so requests know the client's address
+                } catch (const std::exception &error) {
+                    // run_retrying() tries again: still waiting to run, as wait_until_running() sees it
+                    if (honour_stop) {
+                        state_ = run_state::idle;
+                        throw bind_failure{error.what()};
+                    }
+                    throw;
+                }
                 const auto connection_handler = oatpp::web::server::HttpConnectionHandler::createShared(router);
                 server_ = oatpp::network::Server::createShared(provider, connection_handler);
                 server = server_;
+            } catch (const bind_failure &) {
+                throw;
             } catch (...) {
                 state_ = run_state::ended;
                 state_changed_.notify_all();
@@ -817,6 +870,7 @@ public:
             state_ = run_state::running;
         }
         state_changed_.notify_all();
+        if (bound_note_) bound_note_();
 
         server->run();
 
@@ -839,7 +893,10 @@ public:
         {
             const std::lock_guard lock{mutex_};
             server = server_;
+            // run_retrying(): ends its wait, or keeps it from binding when it's about to
+            if (!server) stop_requested_ = true;
         }
+        state_changed_.notify_all();
         if (server) server->stop();
     }
 
@@ -1157,6 +1214,10 @@ window.onload = () => {
     }
 
     enum class run_state { idle, running, ended };
+    // Binding the endpoint failed (run_retrying() tries again)
+    struct bind_failure : std::runtime_error {
+        using std::runtime_error::runtime_error;
+    };
 
     ip_endpoint endpoint_;
     mutable std::mutex mutex_;
@@ -1175,6 +1236,8 @@ window.onload = () => {
     bool documentation_added_ = false; // a second run() keeps the first's
     std::string title_, version_, description_;
     std::shared_ptr<oatpp::network::Server> server_;
+    bool stop_requested_ = false;      // stop() while not serving: run_retrying() returns
+    std::function<void()> bound_note_; // run_retrying(): told once bound after failures
 };
 
 sc::rest_server::server::server::server(ip_endpoint endpoint) : implementation_(std::make_unique<implementation>(std::move(endpoint))) {
@@ -1297,6 +1360,10 @@ void sc::rest_server::server::configure_jwt(jwt_configuration configuration) {
 
 void sc::rest_server::server::run() {
     implementation_->run();
+}
+
+void sc::rest_server::server::run_retrying(const std::chrono::milliseconds retry, const std::function<void(const std::string &)> &on_failure) {
+    implementation_->run_retrying(retry, on_failure);
 }
 
 void sc::rest_server::server::stop() {

@@ -205,6 +205,15 @@ namespace sc::rest_server {
         void run();
         void stop();
 
+        // run() for a service that mustn't give up when its address isn't there yet (a container's
+        // DHCP address comes after network-online.target: EADDRNOTAVAIL) or its port is still taken:
+        // when binding fails it tries again every retry until it binds, then serves as run() does.
+        // on_failure (if given) hears the first failure, then at most one a minute, and once more
+        // when it binds after failing ("bound after N failures"). Returns when stop() is called,
+        // before or after binding (since 3.1.0).
+        void run_retrying(std::chrono::milliseconds retry = std::chrono::seconds{2},
+                          const std::function<void(const std::string &)> &on_failure = {});
+
         // Waits until run(), usually started on another thread, has bound the endpoint, so
         // requests will be accepted. Returns false if run() failed or ended first, or after
         // timeout. For a server that ran before, it reports that earlier run's end until run()
